@@ -22,15 +22,24 @@ pub struct AppState {
     pub dbus_connection: Option<Arc<Connection>>,
     /// System UUID (persistent across restarts)
     pub system_uuid: String,
+    /// Session store for managing user sessions
+    pub session_store: Option<Arc<auth::SessionStore>>,
 }
 
 impl AppState {
     /// Create a new application state
     pub fn new(config: config::Config) -> Self {
+        // Create session store from config
+        let session_store = Some(Arc::new(auth::SessionStore::new(
+            config.auth.session_timeout_seconds,
+            config.auth.max_sessions,
+        )));
+
         Self {
             config: Arc::new(config),
             dbus_connection: None,
             system_uuid: uuid::Uuid::new_v4().to_string(),
+            session_store,
         }
     }
 
