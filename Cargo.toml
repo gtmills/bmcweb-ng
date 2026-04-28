@@ -97,10 +97,6 @@ debug = true
 name = "bmcwebd-ng"
 path = "src/main.rs"
 
-[[bench]]
-name = "http_performance"
-harness = false
-
 [workspace]
 members = [
     ".",
