@@ -1,0 +1,11 @@
+[Unit]
+Description=BMC Web Server Socket
+PartOf=bmcweb-ng.service
+
+[Socket]
+ListenStream=443
+ListenStream=80
+Accept=false
+
+[Install]
+WantedBy=sockets.target

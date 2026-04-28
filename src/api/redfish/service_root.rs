@@ -7,14 +7,16 @@ use serde_json::{json, Value};
 
 /// GET /redfish/v1/
 pub async fn get_service_root() -> Result<Json<Value>, StatusCode> {
-    // TODO: Implement full ServiceRoot response
+    // Generate a UUID (in production, this should be persistent)
+    let uuid = uuid::Uuid::new_v4().to_string();
+    
     let response = json!({
         "@odata.type": "#ServiceRoot.v1_15_0.ServiceRoot",
-        "@odata.id": "/redfish/v1/",
+        "@odata.id": "/redfish/v1",
         "Id": "RootService",
         "Name": "Root Service",
-        "RedfishVersion": "1.15.0",
-        "UUID": "00000000-0000-0000-0000-000000000000",
+        "RedfishVersion": "1.17.0",
+        "UUID": uuid,
         "Systems": {
             "@odata.id": "/redfish/v1/Systems"
         },
@@ -33,11 +35,53 @@ pub async fn get_service_root() -> Result<Json<Value>, StatusCode> {
         "EventService": {
             "@odata.id": "/redfish/v1/EventService"
         },
-        "TaskService": {
+        "Tasks": {
             "@odata.id": "/redfish/v1/TaskService"
         },
         "UpdateService": {
             "@odata.id": "/redfish/v1/UpdateService"
+        },
+        "CertificateService": {
+            "@odata.id": "/redfish/v1/CertificateService"
+        },
+        "TelemetryService": {
+            "@odata.id": "/redfish/v1/TelemetryService"
+        },
+        "Registries": {
+            "@odata.id": "/redfish/v1/Registries"
+        },
+        "JsonSchemas": {
+            "@odata.id": "/redfish/v1/JsonSchemas"
+        },
+        "Cables": {
+            "@odata.id": "/redfish/v1/Cables"
+        },
+        "Fabrics": {
+            "@odata.id": "/redfish/v1/Fabrics"
+        },
+        "Links": {
+            "Sessions": {
+                "@odata.id": "/redfish/v1/SessionService/Sessions"
+            },
+            "ManagerProvidingService": {
+                "@odata.id": "/redfish/v1/Managers/bmc"
+            }
+        },
+        "ProtocolFeaturesSupported": {
+            "ExcerptQuery": false,
+            "ExpandQuery": {
+                "ExpandAll": false,
+                "Levels": false,
+                "Links": false,
+                "NoLinks": false
+            },
+            "FilterQuery": false,
+            "OnlyMemberQuery": true,
+            "SelectQuery": true,
+            "DeepOperations": {
+                "DeepPOST": false,
+                "DeepPATCH": false
+            }
         }
     });
 

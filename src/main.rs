@@ -5,8 +5,11 @@
 use anyhow::Result;
 use clap::Parser;
 use std::path::PathBuf;
-use tracing::{info, Level};
+use std::sync::Arc;
+use tracing::{info, warn, error, Level};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+
+use bmcweb_ng::{AppState, config::Config, protocol::http::HttpServer};
 
 /// Command-line arguments for bmcweb-ng
 #[derive(Parser, Debug)]
@@ -36,20 +39,71 @@ async fn main() -> Result<()> {
     info!("Starting bmcweb-ng v{}", env!("CARGO_PKG_VERSION"));
     info!("Configuration file: {}", args.config.display());
 
-    // TODO: Load configuration
-    // TODO: Initialize DBus connection
-    // TODO: Start HTTP/HTTPS server
-    // TODO: Register signal handlers
-    // TODO: Start metrics server
+    // Load configuration
+    let config = load_config(&args.config)?;
+    info!("Configuration loaded successfully");
+
+    // Initialize application state
+    let mut app_state = AppState::new(config.clone());
+
+    // Initialize DBus connection (optional, may fail on non-Linux systems)
+    match init_dbus_connection().await {
+        Ok(connection) => {
+            info!("DBus connection established");
+            app_state = app_state.with_dbus(connection);
+        }
+        Err(e) => {
+            warn!("Failed to establish DBus connection: {}. Continuing without DBus support.", e);
+        }
+    }
+
+    let app_state = Arc::new(app_state);
 
     info!("bmcweb-ng initialization complete");
+    info!("Server configuration:");
+    info!("  - Bind address: {}", config.server.bind_address);
+    info!("  - Port: {}", config.server.port);
+    info!("  - Max connections: {}", config.server.max_connections);
+
+    // Start HTTP/HTTPS server
+    let server = HttpServer::new(config.server.clone(), app_state.clone());
+    
+    // Spawn server task
+    let server_handle = tokio::spawn(async move {
+        if let Err(e) = server.run().await {
+            error!("Server error: {}", e);
+        }
+    });
+
     info!("Server ready to accept connections");
 
-    // Keep the server running
+    // Wait for shutdown signal
     tokio::signal::ctrl_c().await?;
     info!("Received shutdown signal, gracefully shutting down...");
 
+    // Abort server task
+    server_handle.abort();
+
+    info!("Shutdown complete");
     Ok(())
+}
+
+/// Load configuration from file or use defaults
+fn load_config(path: &PathBuf) -> Result<Config> {
+    if path.exists() {
+        info!("Loading configuration from {}", path.display());
+        Config::from_file(path)
+    } else {
+        warn!("Configuration file not found, using defaults");
+        Ok(Config::default())
+    }
+}
+
+/// Initialize DBus connection
+async fn init_dbus_connection() -> Result<zbus::Connection> {
+    // Try to connect to the system bus
+    let connection = zbus::Connection::system().await?;
+    Ok(connection)
 }
 
 /// Initialize the logging subsystem
