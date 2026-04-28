@@ -1,0 +1,107 @@
+[package]
+name = "bmcweb-ng"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+authors = ["Gunnar Mills <gmills@us.ibm.com>"]
+license = "Apache-2.0"
+description = "Next-generation BMC webserver for OpenBMC, written in Rust"
+repository = "https://github.ibm.com/gmills/bmcweb-ng"
+keywords = ["bmc", "redfish", "openbmc", "webserver", "embedded"]
+categories = ["web-programming::http-server", "embedded"]
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+
+# HTTP server
+axum = { version = "0.7", features = ["ws", "macros"] }
+hyper = { version = "1.1", features = ["full"] }
+tower = { version = "0.4", features = ["full"] }
+tower-http = { version = "0.5", features = ["fs", "trace", "compression-full"] }
+
+# TLS
+tokio-rustls = "0.25"
+rustls = "0.22"
+rustls-pemfile = "2.0"
+
+# WebSocket
+tokio-tungstenite = "0.21"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# DBus
+zbus = { version = "4.0", features = ["tokio"] }
+
+# Authentication
+argon2 = "0.5"
+base64 = "0.21"
+jsonwebtoken = "9.2"
+pam = "0.7"
+
+# Logging and observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-opentelemetry = "0.22"
+opentelemetry = { version = "0.21", features = ["metrics"] }
+opentelemetry-prometheus = "0.14"
+prometheus = "0.13"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Configuration
+clap = { version = "4.4", features = ["derive", "env"] }
+config = "0.14"
+
+# Utilities
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.6", features = ["v4", "serde"] }
+url = "2.5"
+bytes = "1.5"
+futures = "0.3"
+async-trait = "0.1"
+
+[dev-dependencies]
+# Testing
+mockall = "0.12"
+wiremock = "0.6"
+criterion = { version = "0.5", features = ["async_tokio"] }
+proptest = "1.4"
+tempfile = "3.8"
+
+# Test utilities
+tokio-test = "0.4"
+tower-test = "0.4"
+
+[profile.release]
+opt-level = "z"     # Optimize for size
+lto = true          # Enable link-time optimization
+codegen-units = 1   # Better optimization
+strip = true        # Strip symbols
+panic = "abort"     # Smaller binary
+
+[profile.dev]
+opt-level = 0       # No optimization for faster builds
+
+[profile.bench]
+inherits = "release"
+debug = true
+
+[[bin]]
+name = "bmcwebd-ng"
+path = "src/main.rs"
+
+[[bench]]
+name = "http_performance"
+harness = false
+
+[workspace]
+members = [
+    ".",
+]
