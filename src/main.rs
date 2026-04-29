@@ -77,12 +77,31 @@ async fn main() -> Result<()> {
 
     info!("Server ready to accept connections");
 
+    // Start metrics server if enabled
+    let metrics_handle = if config.metrics.enabled && app_state.metrics.is_some() {
+        info!("Starting metrics server on port {}", config.metrics.port);
+        let metrics_state = app_state.clone();
+        let metrics_port = config.metrics.port;
+        
+        Some(tokio::spawn(async move {
+            if let Err(e) = start_metrics_server(metrics_state, metrics_port).await {
+                error!("Metrics server error: {}", e);
+            }
+        }))
+    } else {
+        info!("Metrics server disabled");
+        None
+    };
+
     // Wait for shutdown signal
     tokio::signal::ctrl_c().await?;
     info!("Received shutdown signal, gracefully shutting down...");
 
-    // Abort server task
+    // Abort server tasks
     server_handle.abort();
+    if let Some(handle) = metrics_handle {
+        handle.abort();
+    }
 
     info!("Shutdown complete");
     Ok(())
@@ -125,6 +144,25 @@ fn init_logging(args: &Args) -> Result<()> {
             .init();
     }
 
+    Ok(())
+}
+
+/// Start the metrics server on a separate port
+async fn start_metrics_server(state: Arc<AppState>, port: u16) -> Result<()> {
+    use axum::{routing::get, Router};
+    use bmcweb_ng::observability::metrics_handler;
+
+    let app = Router::new()
+        .route("/metrics", get(metrics_handler))
+        .with_state(state);
+
+    let addr = format!("0.0.0.0:{}", port);
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    
+    info!("Metrics server listening on {}", addr);
+    
+    axum::serve(listener, app).await?;
+    
     Ok(())
 }
 

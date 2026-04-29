@@ -24,6 +24,8 @@ pub struct AppState {
     pub system_uuid: String,
     /// Session store for managing user sessions
     pub session_store: Option<Arc<auth::SessionStore>>,
+    /// Metrics collector for Prometheus
+    pub metrics: Option<Arc<observability::Metrics>>,
 }
 
 impl AppState {
@@ -35,11 +37,25 @@ impl AppState {
             config.auth.max_sessions,
         )));
 
+        // Initialize metrics if enabled
+        let metrics = if config.metrics.enabled {
+            match observability::Metrics::new() {
+                Ok(m) => Some(Arc::new(m)),
+                Err(e) => {
+                    eprintln!("Failed to initialize metrics: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         Self {
             config: Arc::new(config),
             dbus_connection: None,
             system_uuid: uuid::Uuid::new_v4().to_string(),
             session_store,
+            metrics,
         }
     }
 
