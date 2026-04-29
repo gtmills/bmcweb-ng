@@ -219,41 +219,6 @@ Generate and view documentation:
 cargo doc --open
 ```
 
-## Roadmap
-
-### Phase 1: Foundation (Months 1-3)
-- [x] Project structure and build system
-- [ ] HTTP/HTTPS server with tokio + axum
-- [ ] Basic routing and middleware
-- [ ] DBus abstraction layer
-- [ ] Configuration management
-- [ ] Logging and metrics
-
-### Phase 2: Core Features (Months 4-7)
-- [ ] Authentication (Basic, Session, mTLS)
-- [ ] Authorization and privilege checking
-- [ ] Session management
-- [ ] ServiceRoot endpoint
-- [ ] Systems collection
-- [ ] Chassis collection
-- [ ] Managers collection
-
-### Phase 3: Advanced Features (Months 8-13)
-- [ ] All Redfish schemas
-- [ ] WebSocket support
-- [ ] KVM implementation
-- [ ] Virtual media
-- [ ] Event service
-- [ ] Task service
-- [ ] Firmware updates
-
-### Phase 4: Production Ready (Months 14-15)
-- [ ] Performance optimization
-- [ ] Security hardening
-- [ ] Comprehensive documentation
-- [ ] Migration tools
-- [ ] Production deployment guide
-
 ## Performance Targets
 
 | Metric | Target | Current |
