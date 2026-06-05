@@ -23,11 +23,14 @@ The original bmcweb is a mature, production-ready C++ application. This rewrite 
 
 - ✅ **Redfish API** - Full DMTF Redfish specification compliance
 - ✅ **Multiple Protocols** - HTTP/1.1, HTTP/2, HTTPS with TLS 1.3
-- ✅ **Authentication** - Basic, Session, Cookie, mTLS, XToken
-- ✅ **WebSocket Support** - KVM, Serial Console, Event Subscriptions
-- ✅ **DBus Integration** - Async DBus communication with OpenBMC services
+- ✅ **Authentication** - Basic auth with PAM, Session management, Token-based auth
+- ✅ **Event Service** - Event subscriptions and notifications to external systems
+- ✅ **Task Service** - Long-running operation tracking and management
+- ✅ **Update Service** - Firmware update management and inventory
+- ⚠️  **WebSocket Support** - KVM, Serial Console, Event Subscriptions (planned)
+- ⚠️  **DBus Integration** - Async DBus communication with OpenBMC services (partial)
 - ✅ **Performance** - <1MB binary, <10MB memory, <1s startup time
-- ✅ **Observability** - Structured logging, Prometheus metrics, OpenTelemetry tracing
+- ✅ **Observability** - Structured logging, Prometheus metrics support
 
 ## Architecture
 

@@ -25,13 +25,19 @@ bmcweb-ng/
 │   │   └── websocket/
 │   │       └── mod.rs       ❌ WebSocket handlers (TODO)
 │   ├── auth/
-│   │   └── mod.rs           ❌ Authentication (TODO)
+│   │   ├── mod.rs           ✅ Authentication module
+│   │   ├── basic.rs         ✅ HTTP Basic authentication with PAM
+│   │   ├── session.rs       ✅ Session management
+│   │   └── middleware.rs    ✅ Authentication middleware
 │   ├── dbus/
 │   │   └── mod.rs           ⚠️  DBus interface (basic structure)
 │   ├── services/
-│   │   └── mod.rs           ❌ Service modules (TODO)
+│   │   ├── mod.rs           ✅ Service layer exports
+│   │   ├── event.rs         ✅ Event Service implementation
+│   │   ├── task.rs          ✅ Task Service implementation
+│   │   └── update.rs        ✅ Update Service implementation
 │   └── observability/
-│       └── mod.rs           ❌ Metrics/logging (TODO)
+│       └── mod.rs           ⚠️  Metrics (partial implementation)
 ├── bmcweb-ng.service        ✅ Systemd service file
 ├── bmcweb-ng.socket         ✅ Systemd socket file
 ├── Cargo.toml               ✅ Dependencies configured
@@ -106,14 +112,12 @@ bmcweb-ng/
 
 ### ❌ Not Yet Implemented
 
-1. **Authentication** (`src/auth/mod.rs`)
-   - HTTP Basic authentication
-   - Session-based authentication
-   - PAM integration
-   - JWT token support
-   - LDAP/Active Directory integration
-
-2. **Redfish Resources**
+1. **Redfish API Endpoints**
+   - EventService endpoints (service implemented, API TODO)
+   - TaskService endpoints (service implemented, API TODO)
+   - UpdateService endpoints (service implemented, API TODO)
+   
+2. **Additional Redfish Resources**
    - Systems collection and resources
    - Chassis collection and resources
    - Managers collection and resources
@@ -125,31 +129,35 @@ bmcweb-ng/
    - TelemetryService
    - CertificateService
 
-3. **WebSocket Support** (`src/api/websocket/mod.rs`)
+3. **Additional Authentication**
+   - JWT token support
+   - LDAP/Active Directory integration
+   - OAuth2 support
+
+4. **WebSocket Support** (`src/api/websocket/mod.rs`)
    - KVM (Remote Frame Buffer)
    - Virtual Media
    - Host Serial Console
 
-4. **Observability** (`src/observability/mod.rs`)
+5. **Observability** (`src/observability/mod.rs`)
    - Prometheus metrics endpoint
    - OpenTelemetry integration
    - Structured logging
    - Performance monitoring
 
-5. **Services** (`src/services/mod.rs`)
+6. **Additional Services** (`src/services/mod.rs`)
    - System management
    - Chassis management
    - Manager management
-   - Event subscriptions
-   - Task management
+   - Account management
 
-6. **TLS/SSL**
+7. **TLS/SSL**
    - Certificate loading
    - rustls integration
    - Certificate management API
    - Auto-renewal support
 
-7. **Persistent Data**
+8. **Persistent Data**
    - UUID persistence
    - Session storage
    - Configuration cache
@@ -175,18 +183,18 @@ bmcweb-ng/
 | Feature | bmcweb | bmcweb-ng | Notes |
 |---------|--------|-----------|-------|
 | Redfish ServiceRoot | ✅ | ✅ | v1.17.0 compliant |
-| Redfish Systems | ✅ | ❌ | TODO |
-| Redfish Chassis | ✅ | ❌ | TODO |
-| Redfish Managers | ✅ | ❌ | TODO |
+| Redfish Systems | ✅ | ⚠️  | Partial (structure exists) |
+| Redfish Chassis | ✅ | ⚠️  | Partial (structure exists) |
+| Redfish Managers | ✅ | ⚠️  | Partial (structure exists) |
 | DBus REST API | ✅ | ❌ | TODO |
 | KVM WebSocket | ✅ | ❌ | TODO |
 | Virtual Media | ✅ | ❌ | TODO |
 | Host Console | ✅ | ❌ | TODO |
-| Authentication | ✅ | ❌ | TODO |
-| Session Management | ✅ | ❌ | TODO |
-| Event Service | ✅ | ❌ | TODO |
-| Task Service | ✅ | ❌ | TODO |
-| Update Service | ✅ | ❌ | TODO |
+| Authentication | ✅ | ✅ | Basic + Session + Middleware |
+| Session Management | ✅ | ✅ | Full implementation |
+| Event Service | ✅ | ✅ | Core service implemented |
+| Task Service | ✅ | ✅ | Core service implemented |
+| Update Service | ✅ | ✅ | Core service implemented |
 | Static File Serving | ✅ | ❌ | TODO |
 | Systemd Integration | ✅ | ✅ | Service files created |
 
@@ -209,9 +217,13 @@ bmcweb-ng/
 ### Unit Tests
 - ✅ Configuration loading tests
 - ✅ ServiceRoot response tests
+- ✅ Authentication tests (Basic auth parsing)
+- ✅ Session management tests
+- ✅ Event Service tests
+- ✅ Task Service tests
+- ✅ Update Service tests
 - ❌ HTTP server tests (TODO)
 - ❌ DBus integration tests (TODO)
-- ❌ Authentication tests (TODO)
 
 ### Integration Tests
 - ❌ End-to-end Redfish API tests (TODO)
@@ -293,12 +305,16 @@ sudo systemctl start bmcweb-ng.socket
 - [x] Systemd integration
 - [ ] Build and test on Linux
 
-### Phase 2: Essential Features
-- [ ] Authentication (Basic, Session)
-- [ ] Redfish Systems resource
-- [ ] Redfish Chassis resource
-- [ ] Redfish Managers resource
-- [ ] DBus integration
+### Phase 2: Essential Features (IN PROGRESS)
+- [x] Authentication (Basic, Session)
+- [x] Session Management
+- [x] Event Service foundation
+- [x] Task Service foundation
+- [x] Update Service foundation
+- [ ] Redfish Systems resource (complete implementation)
+- [ ] Redfish Chassis resource (complete implementation)
+- [ ] Redfish Managers resource (complete implementation)
+- [ ] DBus integration (complete implementation)
 - [ ] TLS/SSL support
 
 ### Phase 3: Advanced Features

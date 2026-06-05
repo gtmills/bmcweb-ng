@@ -26,6 +26,12 @@ pub struct AppState {
     pub session_store: Option<Arc<auth::SessionStore>>,
     /// Metrics collector for Prometheus
     pub metrics: Option<Arc<observability::Metrics>>,
+    /// Event service for managing subscriptions
+    pub event_service: Option<Arc<services::EventService>>,
+    /// Task service for managing long-running operations
+    pub task_service: Option<Arc<services::TaskService>>,
+    /// Update service for firmware updates
+    pub update_service: Option<Arc<services::UpdateService>>,
 }
 
 impl AppState {
@@ -50,12 +56,24 @@ impl AppState {
             None
         };
 
+        // Initialize event service
+        let event_service = Some(Arc::new(services::EventService::new(64)));
+
+        // Initialize task service (max 100 tasks, 24 hour retention)
+        let task_service = Some(Arc::new(services::TaskService::new(100, 24)));
+
+        // Initialize update service (max 2 concurrent updates)
+        let update_service = Some(Arc::new(services::UpdateService::new(2)));
+
         Self {
             config: Arc::new(config),
             dbus_connection: None,
             system_uuid: uuid::Uuid::new_v4().to_string(),
             session_store,
             metrics,
+            event_service,
+            task_service,
+            update_service,
         }
     }
 
