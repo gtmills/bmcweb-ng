@@ -29,7 +29,9 @@ use anyhow::{Context, Result, anyhow};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
+use zbus::names::InterfaceName;
+use zbus::zvariant::Optional;
 
 /// A variant value returned from DBus.
 ///
@@ -142,8 +144,11 @@ impl DbusClient for ZBusClient {
             .await
             .context("Failed to build Properties proxy")?;
 
+        let iface_name = InterfaceName::try_from(interface)
+            .with_context(|| format!("Invalid interface name: {}", interface))?;
+
         let value = proxy
-            .get(interface, property)
+            .get(iface_name, property)
             .await
             .with_context(|| format!("Failed to get property {}.{} at {}", interface, property, path))?;
 
@@ -159,7 +164,7 @@ impl DbusClient for ZBusClient {
         path: &str,
         interface: &str,
         property: &str,
-        value: DbusValue,
+        _value: DbusValue,
     ) -> Result<()> {
         debug!(
             "DBus SetProperty: path={} interface={} property={}",
@@ -193,8 +198,12 @@ impl DbusClient for ZBusClient {
             .await
             .context("Failed to build Properties proxy")?;
 
+        let iface_name = InterfaceName::try_from(interface)
+            .with_context(|| format!("Invalid interface name: {}", interface))?;
+        let opt_iface: Optional<InterfaceName<'_>> = Optional::from(Some(iface_name));
+
         let props = proxy
-            .get_all(interface)
+            .get_all(opt_iface)
             .await
             .with_context(|| format!("Failed to get all properties on {} at {}", interface, path))?;
 

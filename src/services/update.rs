@@ -11,7 +11,7 @@ use uuid::Uuid;
 use anyhow::{Result, anyhow};
 use tracing::{debug, info, warn};
 
-use super::task::{Task, TaskState, TaskMessage};
+use super::task::Task;
 
 /// Update target type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -234,8 +234,8 @@ impl UpdateService {
         drop(operations);
 
         // Create a task for this update
-        let task_name = format!("Firmware Update: {}", request.target.as_str());
-        let task_description = Some(format!(
+        let _task_name = format!("Firmware Update: {}", request.target.as_str());
+        let _task_description = Some(format!(
             "Updating {} firmware",
             request.target.as_str()
         ));

@@ -37,7 +37,6 @@ use axum::{
         State,
     },
     response::IntoResponse,
-    http::StatusCode,
 };
 use futures::{SinkExt, StreamExt};
 use std::sync::Arc;
@@ -146,13 +145,14 @@ async fn handle_serial_console(mut ws: WebSocket, _state: Arc<AppState>) {
     let ws_to_socket = tokio::spawn(async move {
         while let Some(msg) = ws_receiver.next().await {
             match msg {
-                Ok(Message::Binary(data)) | Ok(Message::Text(data)) => {
-                    let bytes: &[u8] = if let Message::Binary(ref b) = msg.unwrap_or(Message::Binary(data.clone())) {
-                        b
-                    } else {
-                        data.as_bytes()
-                    };
-                    if stream_writer.write_all(bytes).await.is_err() {
+                Ok(Message::Binary(data)) => {
+                    if stream_writer.write_all(&data).await.is_err() {
+                        debug!("Failed to write to console socket");
+                        break;
+                    }
+                }
+                Ok(Message::Text(text)) => {
+                    if stream_writer.write_all(text.as_bytes()).await.is_err() {
                         debug!("Failed to write to console socket");
                         break;
                     }

@@ -33,6 +33,7 @@ use axum::{
     middleware,
     routing::get,
 };
+use tower::ServiceExt as _;
 use rcgen::generate_simple_self_signed;
 use rustls::ServerConfig;
 use rustls_pemfile::{certs, pkcs8_private_keys};

@@ -18,7 +18,7 @@ use axum::{
     response::Json,
     Json as JsonBody,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
@@ -103,7 +103,7 @@ pub async fn get_account_service(
 ) -> Result<Json<Value>, StatusCode> {
     debug!("GET /redfish/v1/AccountService");
 
-    let timeout = state.config.auth.session_timeout_seconds;
+    let _timeout = state.config.auth.session_timeout_seconds;
     let response = json!({
         "@odata.type": "#AccountService.v1_12_0.AccountService",
         "@odata.id": "/redfish/v1/AccountService",

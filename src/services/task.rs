@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 use anyhow::{Result, anyhow};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 /// Task state
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

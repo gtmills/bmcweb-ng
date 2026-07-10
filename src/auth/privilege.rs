@@ -177,7 +177,7 @@ pub fn check_privilege(
 
 /// Extract the role string from a session, defaulting to "ReadOnly" for
 /// sessions that were created via Basic auth and have no explicit role set.
-fn session_role(session: &UserSession) -> String {
+fn session_role(_session: &UserSession) -> String {
     // In the current implementation, the role is not yet stored in the session.
     // TODO: Store the role in UserSession after fetching it from DBus
     //       xyz.openbmc_project.User.Manager.GetUserInfo during session creation.

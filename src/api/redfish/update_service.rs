@@ -102,7 +102,7 @@ pub async fn get_update_service(
     debug!("GET /redfish/v1/UpdateService");
 
     let update_service = state.update_service.as_ref();
-    let active_ops = update_service
+    let _active_ops = update_service
         .map(|s| s.active_operation_count())
         .unwrap_or(0);
 

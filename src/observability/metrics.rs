@@ -3,7 +3,7 @@
 //! Provides metrics collection and exposition for monitoring
 
 use prometheus::{
-    Counter, Gauge, Histogram, HistogramOpts, IntCounter, IntGauge, Opts, Registry,
+    Gauge, Histogram, HistogramOpts, IntCounter, IntGauge, Opts, Registry,
 };
 use std::sync::Arc;
 use tracing::warn;
@@ -138,7 +138,6 @@ impl Metrics {
 
     /// Gather all metrics in Prometheus text format
     pub fn gather(&self) -> String {
-        use prometheus::Encoder;
         let encoder = prometheus::TextEncoder::new();
         let metric_families = self.registry.gather();
         

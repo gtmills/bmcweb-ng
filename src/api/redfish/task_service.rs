@@ -75,8 +75,8 @@ pub async fn get_task_service(
     debug!("GET /redfish/v1/TaskService");
 
     let task_service = state.task_service.as_ref();
-    let total = task_service.map(|s| s.task_count()).unwrap_or(0);
-    let active = task_service.map(|s| s.active_task_count()).unwrap_or(0);
+    let _total = task_service.map(|s| s.task_count()).unwrap_or(0);
+    let _active = task_service.map(|s| s.active_task_count()).unwrap_or(0);
 
     let response = json!({
         "@odata.type": "#TaskService.v1_2_0.TaskService",

@@ -12,7 +12,7 @@ use std::sync::Arc;
 use tracing::{debug, warn};
 
 use crate::AppState;
-use super::{basic, session::{SessionStore, SessionType}};
+use super::{basic, session::SessionType};
 
 /// Extract client IP from request headers.
 ///

@@ -11,7 +11,7 @@
 use anyhow::{Result, anyhow};
 use base64::{Engine as _, engine::general_purpose};
 use std::net::IpAddr;
-use tracing::{debug, warn};
+use tracing::debug;
 
 #[cfg(feature = "pam")]
 use pam::Authenticator;

@@ -23,7 +23,7 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
-use crate::services::{EventMessage, EventService, EventSubscription, EventType, Protocol};
+use crate::services::{EventMessage, EventSubscription, EventType, Protocol};
 use crate::AppState;
 
 // ---------------------------------------------------------------------------
@@ -321,7 +321,7 @@ pub async fn create_subscription(
         })?;
 
     info!("Created event subscription '{}'", sub.id);
-    let location = format!("/redfish/v1/EventService/Subscriptions/{}", sub.id);
+    let _location = format!("/redfish/v1/EventService/Subscriptions/{}", sub.id);
     let body_json = subscription_to_json(&sub);
 
     Ok((StatusCode::CREATED, Json(body_json)))

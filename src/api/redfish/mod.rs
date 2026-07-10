@@ -2,7 +2,7 @@
 //!
 //! This module implements the DMTF Redfish specification.
 
-use axum::{Router, routing::{delete, get, patch, post}};
+use axum::{Router, routing::{get, patch, post}};
 use std::sync::Arc;
 
 pub mod accounts;
