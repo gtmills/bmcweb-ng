@@ -6,7 +6,7 @@ rust-version = "1.75"
 authors = ["Gunnar Mills <gmills@us.ibm.com>"]
 license = "Apache-2.0"
 description = "Next-generation BMC webserver for OpenBMC, written in Rust"
-repository = "https://github.ibm.com/gmills/bmcweb-ng"
+repository = "https://github.com/gtmills/bmcweb-ng"
 keywords = ["bmc", "redfish", "openbmc", "webserver", "embedded"]
 categories = ["web-programming::http-server", "embedded"]
 

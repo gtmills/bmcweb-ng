@@ -22,12 +22,12 @@ This project follows the OpenBMC Code of Conduct. Please be respectful and profe
 1. **Fork the repository** on GitHub
 2. **Clone your fork** locally:
    ```bash
-   git clone https://github.ibm.com/YOUR-USERNAME/bmcweb-ng
+   git clone https://github.com/YOUR-USERNAME/bmcweb-ng
    cd bmcweb-ng
    ```
 3. **Add upstream remote**:
    ```bash
-   git remote add upstream https://github.ibm.com/gmills/bmcweb-ng
+   git remote add upstream https://github.com/gtmills/bmcweb-ng
    ```
 
 ## Development Setup

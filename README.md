@@ -69,7 +69,7 @@ The original bmcweb is a mature, production-ready C++ application. This rewrite 
 
 ```bash
 # Clone the repository
-git clone https://github.ibm.com/gmills/bmcweb-ng
+git clone https://github.com/gtmills/bmcweb-ng.git
 cd bmcweb-ng
 
 # Build in debug mode
@@ -272,8 +272,9 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 ## Contact
 
 - **Project Lead**: Gunnar Mills
-- **Repository**: https://github.ibm.com/gmills/bmcweb-ng
-- **Issues**: https://github.ibm.com/gmills/bmcweb-ng/issues
+- **Repository**: https://github.com/gtmills/bmcweb-ng
+- **Issues**: https://github.com/gtmills/bmcweb-ng/issues
+- **IBM fork of upstream**: https://github.com/ibm-openbmc/bmcweb
 
 ## Related Projects
 

@@ -31,7 +31,7 @@ This guide provides detailed instructions for building bmcweb-ng from source.
 
 ```bash
 # Clone the repository
-git clone https://github.ibm.com/gmills/bmcweb-ng
+git clone https://github.com/gtmills/bmcweb-ng
 cd bmcweb-ng
 
 # Build in debug mode

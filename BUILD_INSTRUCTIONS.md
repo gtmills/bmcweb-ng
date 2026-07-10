@@ -67,7 +67,7 @@ sudo pacman -S \
 ### 1. Clone the Repository
 ```bash
 cd /path/to/workspace
-git clone https://github.ibm.com/gmills/bmcweb-ng.git
+git clone https://github.com/gtmills/bmcweb-ng.git
 cd bmcweb-ng
 ```
 
