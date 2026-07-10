@@ -14,7 +14,19 @@ use tracing::{debug, warn};
 use crate::AppState;
 use super::{basic, session::{SessionStore, SessionType}};
 
-/// Extract client IP from request
+/// Extract client IP from request headers.
+///
+/// Checks `X-Forwarded-For` and `X-Real-IP` in order, falling back to
+/// `127.0.0.1` when neither is present.
+///
+/// This is the public helper used by session creation endpoints.
+pub fn extract_client_ip(headers: &HeaderMap) -> std::net::IpAddr {
+    get_client_ip(headers).unwrap_or_else(|| {
+        std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1))
+    })
+}
+
+/// Extract client IP from request headers (private implementation)
 fn get_client_ip(headers: &HeaderMap) -> Option<std::net::IpAddr> {
     // Try X-Forwarded-For first
     if let Some(forwarded) = headers.get("x-forwarded-for") {
@@ -51,10 +63,7 @@ pub async fn auth_middleware(
     mut request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    let client_ip = get_client_ip(&headers).unwrap_or_else(|| {
-        std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1))
-    });
-
+    let client_ip = extract_client_ip(&headers);
     debug!("Authentication check for IP: {}", client_ip);
 
     // Get session store from app state
@@ -135,9 +144,7 @@ pub async fn optional_auth_middleware(
     mut request: Request,
     next: Next,
 ) -> Response {
-    let client_ip = get_client_ip(&headers).unwrap_or_else(|| {
-        std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1))
-    });
+    let client_ip = extract_client_ip(&headers);
 
     if let Some(session_store) = state.session_store.as_ref() {
         // Try to authenticate but don't fail if unsuccessful

@@ -2,13 +2,14 @@
 //!
 //! This module implements the DMTF Redfish specification.
 
-use axum::{Router, routing::{get, post}};
+use axum::{Router, routing::{delete, get, patch, post}};
 use std::sync::Arc;
 
-pub mod service_root;
-pub mod systems;
 pub mod chassis;
 pub mod managers;
+pub mod service_root;
+pub mod sessions;
+pub mod systems;
 
 use crate::AppState;
 
@@ -29,9 +30,20 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/Managers/:manager_id", get(managers::get_manager))
         .route("/Managers/:manager_id/Actions/Manager.Reset",
                post(managers::reset_manager))
+        // SessionService routes
+        .route("/SessionService", get(sessions::get_session_service))
+        .route("/SessionService", patch(sessions::patch_session_service))
+        .route("/SessionService/Sessions",
+               get(sessions::get_sessions_collection)
+               .post(sessions::create_session))
+        // Alias per DSP0266 §13.3.3
+        .route("/SessionService/Sessions/Members",
+               post(sessions::create_session))
+        .route("/SessionService/Sessions/:session_id",
+               get(sessions::get_session)
+               .delete(sessions::delete_session))
         // TODO: Add more Redfish resource routes:
         // .route("/AccountService", get(accounts::get_account_service))
-        // .route("/SessionService", get(sessions::get_session_service))
         // .route("/EventService", get(event_service::get_event_service))
         // .route("/TaskService", get(task_service::get_task_service))
         // .route("/UpdateService", get(update_service::get_update_service))
@@ -39,7 +51,6 @@ pub fn router() -> Router<Arc<AppState>> {
 
 // TODO: Add more Redfish resource modules:
 // - accounts - Account management
-// - sessions - Session management
 // - event_service - Event subscriptions
 // - task_service - Task management
 // - update_service - Firmware updates
