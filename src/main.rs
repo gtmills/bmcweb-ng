@@ -43,8 +43,12 @@ async fn main() -> Result<()> {
     let config = load_config(&args.config)?;
     info!("Configuration loaded successfully");
 
-    // Initialize application state
-    let mut app_state = AppState::new(config.clone());
+    // Load or generate persistent system UUID
+    let system_uuid = bmcweb_ng::persistent_data::load_or_generate_uuid("/var/lib/bmcweb");
+    info!("System UUID: {}", system_uuid);
+
+    // Initialize application state with persistent UUID
+    let mut app_state = AppState::new(config.clone()).with_uuid(system_uuid);
 
     // Initialize DBus connection (optional, may fail on non-Linux systems)
     match init_dbus_connection().await {

@@ -10,6 +10,7 @@ pub mod auth;
 pub mod config;
 pub mod dbus;
 pub mod observability;
+pub mod persistent_data;
 pub mod protocol;
 pub mod services;
 
