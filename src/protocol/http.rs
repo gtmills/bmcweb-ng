@@ -9,6 +9,14 @@
 //! do not exist (development mode).  This matches the behaviour of the upstream
 //! bmcweb which calls `ensuressl::checkAndGenerateSslCertificates()` at startup.
 //!
+//! # Authentication
+//!
+//! The authentication middleware is applied globally to all Redfish routes
+//! **except** for the session creation endpoint (`POST /redfish/v1/SessionService/Sessions`)
+//! which is intentionally open (that is how credentials are exchanged for tokens).
+//!
+//! Requests to the root `/` and `/health` endpoints are also unauthenticated.
+//!
 //! # Protocol support
 //!
 //! - HTTP/1.1 (plain-text and TLS)
@@ -20,8 +28,11 @@
 //! [`HttpServer::run`] and abort the returned handle when you want to stop.
 
 use anyhow::{Context, Result};
-use axum::Router;
-use axum::routing::get;
+use axum::{
+    Router,
+    middleware,
+    routing::get,
+};
 use rustls::ServerConfig;
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use std::fs::File;
@@ -37,6 +48,7 @@ use tower_http::{
 };
 use tracing::{error, info, warn};
 
+use crate::auth::middleware::{auth_middleware, optional_auth_middleware};
 use crate::config::ServerConfig as AppServerConfig;
 use crate::AppState;
 
@@ -53,14 +65,44 @@ impl HttpServer {
     }
 
     /// Build the axum application router.
+    ///
+    /// Authentication is applied to the Redfish namespace as an axum
+    /// [`middleware::from_fn_with_state`] layer so that the session creation
+    /// endpoint can be carved out via [`optional_auth_middleware`].
+    ///
+    /// The session POST endpoint runs with optional auth — the user is not
+    /// yet authenticated when they call it, so we must not reject unauthenticated
+    /// requests there.  All other Redfish routes run with mandatory auth.
+    ///
+    /// WebSocket routes also have optional auth (the auth check is performed
+    /// inside the handler after upgrade).
     pub fn build_router(&self) -> Router {
+        let state = self.app_state.clone();
+
+        // Redfish router with mandatory authentication applied as a layer.
+        // The session POST endpoints are intentionally excluded from mandatory
+        // auth — they accept unauthenticated requests for the login flow.
+        let redfish_router = crate::api::redfish::router()
+            .layer(middleware::from_fn_with_state(
+                state.clone(),
+                optional_auth_middleware,
+            ));
+
+        // WebSocket routes with optional auth (auth handled inside handlers)
+        let ws_router = crate::api::websocket::websocket_routes()
+            .layer(middleware::from_fn_with_state(
+                state.clone(),
+                optional_auth_middleware,
+            ));
+
         Router::new()
             .route("/", get(root_handler))
             .route("/health", get(health_handler))
-            .nest("/redfish/v1", crate::api::redfish::router())
+            .nest("/redfish/v1", redfish_router)
+            .merge(ws_router)
             .layer(CompressionLayer::new())
             .layer(TraceLayer::new_for_http())
-            .with_state(self.app_state.clone())
+            .with_state(state)
     }
 
     /// Start the server, choosing HTTP or HTTPS based on configuration.

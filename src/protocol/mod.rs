@@ -1,9 +1,7 @@
-//! Protocol layer - HTTP, WebSocket, TLS
+//! Protocol layer — HTTP/HTTPS server and TLS configuration.
 //!
-//! Low-level protocol handling
+//! Low-level protocol handling.  WebSocket endpoints are registered in
+//! `crate::api::websocket` and merged into the main router by `HttpServer`.
 
 pub mod http;
-
-// TODO: Implement additional protocol modules:
-// - websocket.rs - WebSocket protocol handling
-// - tls.rs - TLS configuration and certificate management
+pub use http::HttpServer;
