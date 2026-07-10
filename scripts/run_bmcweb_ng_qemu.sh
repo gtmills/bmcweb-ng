@@ -127,8 +127,10 @@ if [[ "${SKIP_BUILD:-0}" == "1" ]]; then
     fi
     info "Using existing binary: ${BINARY_PATH} ($(du -sh "${BINARY_PATH}" | cut -f1))"
 else
-    info "Building release binary (this may take a few minutes on first run)..."
+    info "Building release binary (PAM disabled for ARM cross-compilation)..."
     cd "${REPO_DIR}"
+    # No --features pam: PAM is optional and requires ARM libpam headers.
+    # In dev/QEMU mode the auth stub accepts any non-empty credentials.
     cargo build --release --target "${ARM_TARGET}" 2>&1
 
     if [[ ! -f "${BINARY_PATH}" ]]; then

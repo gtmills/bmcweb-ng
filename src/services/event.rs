@@ -312,27 +312,80 @@ impl EventService {
     }
 }
 
-/// Send event to a subscriber
+/// Send event to a subscriber using a plain hyper HTTP/1.1 POST.
+///
+/// Uses `hyper` directly (already a dependency) to avoid pulling in `reqwest`
+/// and its `openssl-sys` transitive dependency, which breaks cross-compilation
+/// to `arm-unknown-linux-gnueabihf` without an ARM OpenSSL sysroot.
+///
+/// Only plain HTTP destinations are supported here — TLS webhook delivery is
+/// a Phase 4 enhancement.  For QEMU smoke testing all destinations are HTTP.
 async fn send_event_to_subscriber(destination: &str, payload: &EventPayload) -> Result<()> {
-    debug!("Sending event to: {}", destination);
-    
-    // Create HTTP client
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()?;
+    use http_body_util::Full;
+    use hyper::Request;
+    use hyper::body::Bytes;
+    use hyper_util::rt::TokioIo;
+    use tokio::net::TcpStream;
 
-    // Send POST request
-    let response = client
-        .post(destination)
-        .json(payload)
-        .send()
-        .await?;
+    debug!("Sending event to: {}", destination);
+
+    // Parse destination URL
+    let uri: hyper::Uri = destination.parse()
+        .map_err(|e| anyhow!("Invalid destination URL '{}': {}", destination, e))?;
+
+    let host = uri.host().ok_or_else(|| anyhow!("No host in destination URL"))?;
+    let port = uri.port_u16().unwrap_or(80);
+    let addr = format!("{}:{}", host, port);
+    let path_and_query = uri.path_and_query()
+        .map(|p| p.as_str())
+        .unwrap_or("/");
+
+    // Serialise payload
+    let body_bytes = serde_json::to_vec(payload)
+        .map_err(|e| anyhow!("Failed to serialise event payload: {}", e))?;
+    let content_length = body_bytes.len();
+
+    // Connect with a 30-second timeout
+    let stream = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        TcpStream::connect(&addr),
+    )
+    .await
+    .map_err(|_| anyhow!("Connection to {} timed out", addr))?
+    .map_err(|e| anyhow!("Failed to connect to {}: {}", addr, e))?;
+
+    let io = TokioIo::new(stream);
+
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(io)
+        .await
+        .map_err(|e| anyhow!("HTTP handshake failed: {}", e))?;
+
+    // Drive the connection in the background
+    tokio::spawn(async move {
+        if let Err(e) = conn.await {
+            warn!("Event HTTP connection error: {}", e);
+        }
+    });
+
+    let request = Request::builder()
+        .method("POST")
+        .uri(path_and_query)
+        .header("Host", host)
+        .header("Content-Type", "application/json")
+        .header("Content-Length", content_length)
+        .body(Full::new(Bytes::from(body_bytes)))
+        .map_err(|e| anyhow!("Failed to build HTTP request: {}", e))?;
+
+    let response = sender
+        .send_request(request)
+        .await
+        .map_err(|e| anyhow!("Failed to send event POST: {}", e))?;
 
     if response.status().is_success() {
-        debug!("Event sent successfully to {}", destination);
+        debug!("Event sent successfully to {} (HTTP {})", destination, response.status());
         Ok(())
     } else {
-        Err(anyhow!("Failed to send event: HTTP {}", response.status()))
+        Err(anyhow!("Subscriber returned HTTP {}", response.status()))
     }
 }
 

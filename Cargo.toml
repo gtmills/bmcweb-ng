@@ -10,6 +10,14 @@ repository = "https://github.com/gtmills/bmcweb-ng"
 keywords = ["bmc", "redfish", "openbmc", "webserver", "embedded"]
 categories = ["web-programming::http-server", "embedded"]
 
+# Feature flags
+# pam   — enable real PAM authentication (requires libpam headers at build time)
+#          Disabled by default so the crate cross-compiles cleanly to ARM without
+#          an ARM PAM sysroot.  Enable for production: cargo build --features pam
+[features]
+default = []
+pam = ["dep:pam"]
+
 [dependencies]
 # Async runtime
 tokio = { version = "1.35", features = ["full"] }
@@ -18,7 +26,8 @@ tokio-util = { version = "0.7", features = ["codec"] }
 # HTTP server
 axum = { version = "0.7", features = ["ws", "macros"] }
 hyper = { version = "1.1", features = ["full"] }
-hyper-util = { version = "0.1", features = ["tokio"] }
+hyper-util = { version = "0.1", features = ["tokio", "client", "client-legacy", "http1"] }
+http-body-util = "0.1"
 tower = { version = "0.4", features = ["full"] }
 tower-http = { version = "0.5", features = ["fs", "trace", "compression-full"] }
 
@@ -43,7 +52,10 @@ zbus = { version = "4.0", features = ["tokio"] }
 argon2 = "0.5"
 base64 = "0.21"
 jsonwebtoken = "9.2"
-pam = "0.7"
+# pam is optional — gated behind the "pam" feature flag so ARM cross-compilation
+# works without libpam ARM headers.  When disabled, auth stubs accept all logins
+# (suitable for QEMU development/testing).
+pam = { version = "0.7", optional = true }
 
 # Logging and observability
 tracing = "0.1"
@@ -68,7 +80,8 @@ url = "2.5"
 bytes = "1.5"
 futures = "0.3"
 async-trait = "0.1"
-reqwest = { version = "0.11", features = ["json"] }
+# reqwest removed — event dispatch now uses hyper directly to avoid the
+# openssl-sys transitive dependency that breaks ARM cross-compilation.
 
 [dev-dependencies]
 # Testing
