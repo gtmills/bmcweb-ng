@@ -59,46 +59,49 @@ wsl --install -d Ubuntu
 
 ## QEMU Binary
 
-The script downloads `qemu-system-arm` from the OpenBMC Jenkins CI. This is
-the same QEMU build used by the upstream OpenBMC automated tests:
-
-```
-https://jenkins.openbmc.org/job/latest-qemu-x86/lastSuccessfulBuild/artifact/qemu/build/qemu-system-arm
-```
-
-The binary is cached at `target/qemu-test/qemu-system-arm`. Delete it to force
-a re-download.
+`qemu-system-arm` is installed automatically from the Ubuntu `apt` package
+(`qemu-system-arm` v8.2+). No manual download required.
 
 ---
 
 ## OpenBMC Image
 
-The `qemuarm` platform image is downloaded from the OpenBMC main-branch CI:
+The OpenBMC Jenkins CI no longer provides publicly accessible artifact
+downloads. The image must be either **built from source** or **placed manually**.
 
-```
-https://jenkins.openbmc.org/job/ci-openbmc/job/openbmc/job/main/lastSuccessfulBuild/
-  artifact/openbmc/build/tmp/deploy/images/qemuarm/
-    uImage                                      ← ARM kernel
-    obmc-phosphor-image-qemuarm-*.rootfs.ext4.zst   ← Root filesystem
-    qemuarm-*.dtb                               ← Device tree blob
-```
-
-### Manual Download
-
-If the automated download fails, download the three files above manually,
-decompress the `.zst` rootfs:
+### Option A — Build from source (recommended)
 
 ```bash
-zstd -d obmc-phosphor-image-qemuarm-*.rootfs.ext4.zst
+# Runs bitbake inside the OpenBMC tree (~30 min, needs ~50 GB free)
+BUILD_OPENBMC=1 bash scripts/run_bmcweb_ng_qemu.sh
 ```
 
-Then place them in `target/qemu-test/image/`:
+This clones `openbmc/openbmc` tag `2.18.0` into `target/qemu-test/openbmc-src`,
+builds `obmc-phosphor-image` for the `qemuarm` machine, and copies the output
+images to `target/qemu-test/image/`. Subsequent runs reuse the cached images.
+
+### Option B — Place pre-built files manually
+
+If you have access to a pre-built OpenBMC qemuarm image (e.g. from a local
+Yocto build or a colleague), place these three files in `target/qemu-test/image/`:
 
 ```
 target/qemu-test/image/
-├── uImage
-├── obmc-phosphor-image-qemuarm.ext4
-└── qemuarm.dtb
+├── uImage                              ← ARM kernel (uImage format)
+├── obmc-phosphor-image-qemuarm.ext4    ← Root filesystem (ext4, NOT compressed)
+└── qemuarm.dtb                         ← Device tree blob
+```
+
+If you have the compressed rootfs (`.ext4.zst`), decompress it first:
+
+```bash
+zstd -d obmc-phosphor-image-qemuarm*.ext4.zst -o target/qemu-test/image/obmc-phosphor-image-qemuarm.ext4
+```
+
+Then run normally:
+
+```bash
+bash scripts/run_bmcweb_ng_qemu.sh
 ```
 
 ---

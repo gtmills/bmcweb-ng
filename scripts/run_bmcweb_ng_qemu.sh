@@ -92,7 +92,9 @@ apt_install \
     libpam0g-dev \
     libdbus-1-dev \
     gcc-arm-linux-gnueabihf \
-    binutils-arm-linux-gnueabihf
+    binutils-arm-linux-gnueabihf \
+    qemu-system-arm \
+    libfdt1
 
 # Install Rust if not present
 if ! command -v cargo &>/dev/null; then
@@ -143,13 +145,12 @@ else
     info "ARM ELF check: $(file "${BINARY_PATH}")"
 fi
 
-# ── 3–5: run setup_qemu_test.sh to download image + boot + baseline tests ─────
+# ── 3–5: download image + boot + baseline tests ───────────────────────────────
 divider
-step "3/11  Downloading QEMU binary and OpenBMC image (if not cached)"
+step "3/11  Resolving QEMU binary and OpenBMC image (cached after first run)"
 step "4/11  Booting OpenBMC in QEMU"
 step "5/11  Waiting for OpenBMC to come up"
 
-QEMU_BINARY="${WORK_DIR}/qemu-system-arm"
 QEMU_PIDFILE="${WORK_DIR}/qemu.pid"
 QEMU_LOG="${WORK_DIR}/qemu.log"
 QEMU_IMG_DIR="${WORK_DIR}/image"
@@ -159,82 +160,84 @@ DTB="${QEMU_IMG_DIR}/qemuarm.dtb"
 
 mkdir -p "${WORK_DIR}" "${QEMU_IMG_DIR}"
 
-# ── Download QEMU binary ───────────────────────────────────────────────────────
-QEMU_URL="https://jenkins.openbmc.org/job/latest-qemu-x86/lastSuccessfulBuild/artifact/qemu/build/qemu-system-arm"
-if [[ ! -f "${QEMU_BINARY}" ]]; then
-    info "Downloading QEMU ARM binary from OpenBMC Jenkins CI..."
-    wget -q --show-progress -O "${QEMU_BINARY}" "${QEMU_URL}" || {
-        error "Failed to download QEMU binary. Check network or see QEMU_SETUP.md."
-        exit 1
-    }
-    chmod +x "${QEMU_BINARY}"
-    info "QEMU downloaded: $(du -sh "${QEMU_BINARY}" | cut -f1)"
+# ── Resolve QEMU binary ────────────────────────────────────────────────────────
+# Prefer the system-installed qemu-system-arm (apt package, no extra deps).
+# The OpenBMC Jenkins binary requires libfdt.so.1 which may not be present.
+if command -v qemu-system-arm &>/dev/null; then
+    QEMU_BINARY="$(command -v qemu-system-arm)"
+    info "Using system qemu-system-arm: ${QEMU_BINARY}"
 else
-    info "QEMU binary cached: ${QEMU_BINARY}"
+    # Fallback: download from OpenBMC Jenkins and install libfdt1
+    QEMU_BINARY="${WORK_DIR}/qemu-system-arm"
+    QEMU_URL="https://jenkins.openbmc.org/job/latest-qemu-x86/lastSuccessfulBuild/artifact/qemu/build/qemu-system-arm"
+    if [[ ! -f "${QEMU_BINARY}" ]]; then
+        info "System qemu-system-arm not found; downloading from OpenBMC Jenkins..."
+        # libfdt1 is required by the Jenkins binary
+        sudo apt-get install -y libfdt1 2>/dev/null || true
+        wget -q --show-progress -O "${QEMU_BINARY}" "${QEMU_URL}" || {
+            error "Failed to download QEMU binary. Install qemu-system-arm or see QEMU_SETUP.md."
+            exit 1
+        }
+        chmod +x "${QEMU_BINARY}"
+        info "QEMU downloaded: $(du -sh "${QEMU_BINARY}" | cut -f1)"
+    else
+        info "QEMU binary cached: ${QEMU_BINARY}"
+    fi
 fi
 
 if ! "${QEMU_BINARY}" --version 2>/dev/null | grep -q "QEMU"; then
-    error "QEMU binary at ${QEMU_BINARY} failed sanity check. Remove it and retry."
+    error "qemu-system-arm at '${QEMU_BINARY}' failed to execute."
+    error "Try: sudo apt-get install -y qemu-system-arm libfdt1"
     exit 1
 fi
+info "QEMU version: $("${QEMU_BINARY}" --version | head -1)"
 
-# ── Download OpenBMC image ─────────────────────────────────────────────────────
-JENKINS_BUILD="https://jenkins.openbmc.org/job/ci-openbmc/job/openbmc/job/main/lastSuccessfulBuild"
-
-download_if_missing() {
-    # download_if_missing <dest_file> <url> [<description>]
-    local dest="$1" url="$2" desc="${3:-$2}"
-    if [[ ! -f "${dest}" ]]; then
-        info "Downloading ${desc}..."
-        wget -q --show-progress -O "${dest}" "${url}" 2>/dev/null || { rm -f "${dest}"; return 1; }
-    fi
-}
+# ── Obtain OpenBMC qemuarm image ──────────────────────────────────────────────
+# The OpenBMC Jenkins CI no longer exposes public artifact downloads.
+# Options (in priority order):
+#   1. Images already cached in ${QEMU_IMG_DIR}  (re-run after first build)
+#   2. BUILD_OPENBMC=1  — run scripts/build_openbmc_image.sh (20-60 min, needs ~50 GB)
+#   3. Manual placement — see QEMU_SETUP.md for exact file names
 
 if [[ ! -f "${KERNEL}" || ! -f "${ROOTFS}" || ! -f "${DTB}" ]]; then
-    info "Fetching OpenBMC qemuarm artifact manifest from Jenkins..."
-    manifest=$(curl -sf --max-time 30 \
-        "${JENKINS_BUILD}/api/json?tree=artifacts[relativePath,fileName]" \
-        2>/dev/null || echo "")
 
-    if [[ -n "${manifest}" ]]; then
-        kernel_rel=$(echo "${manifest}" | jq -r \
-            '.artifacts[].relativePath | select(test("qemuarm.*uImage$"))' 2>/dev/null | head -1)
-        rootfs_rel=$(echo "${manifest}" | jq -r \
-            '.artifacts[].relativePath | select(test("qemuarm.*ext4\\.zst$"))' 2>/dev/null | head -1)
-        dtb_rel=$(echo "${manifest}" | jq -r \
-            '.artifacts[].relativePath | select(test("qemuarm.*\\.dtb$"))' 2>/dev/null | head -1)
+    if [[ "${BUILD_OPENBMC:-0}" == "1" ]]; then
+        # ── Build from source via bitbake ──────────────────────────────────
+        step "BUILD_OPENBMC=1: building qemuarm image from source (20-60 min)..."
+        bash "${SCRIPT_DIR}/build_openbmc_image.sh"
+        # build_openbmc_image.sh places files in ${QEMU_IMG_DIR}
+    else
+        # ── No cached images and no build flag — print clear instructions ──
+        error "OpenBMC qemuarm image files not found in: ${QEMU_IMG_DIR}"
+        error ""
+        error "The OpenBMC Jenkins CI no longer provides public artifact downloads."
+        error "You have two options:"
+        error ""
+        error "  OPTION A — Build the image from source (recommended, ~30 min):"
+        error "    BUILD_OPENBMC=1 bash scripts/run_bmcweb_ng_qemu.sh"
+        error "    (requires ~50 GB free disk space and a working internet connection)"
+        error ""
+        error "  OPTION B — Place pre-built files manually:"
+        error "    mkdir -p ${QEMU_IMG_DIR}"
+        error "    # Copy these three files into that directory:"
+        error "    #   uImage                              (ARM kernel)"
+        error "    #   obmc-phosphor-image-qemuarm.ext4    (root filesystem)"
+        error "    #   qemuarm.dtb                         (device tree)"
+        error "    # Then re-run: bash scripts/run_bmcweb_ng_qemu.sh"
+        error ""
+        error "  See QEMU_SETUP.md for full details."
+        exit 1
     fi
-
-    art="${JENKINS_BUILD}/artifact"
-
-    if [[ ! -f "${KERNEL}" ]]; then
-        download_if_missing "${KERNEL}" "${art}/${kernel_rel:-openbmc/build/tmp/deploy/images/qemuarm/uImage}" "uImage kernel" \
-            || { error "Could not download kernel. See QEMU_SETUP.md."; exit 1; }
-    fi
-
-    if [[ ! -f "${ROOTFS}" ]]; then
-        zst="${ROOTFS}.zst"
-        download_if_missing "${zst}" "${art}/${rootfs_rel:-}" "rootfs (.zst)" || {
-            error "Could not download rootfs. See QEMU_SETUP.md."
-            exit 1
-        }
-        info "Decompressing rootfs (may take a minute)..."
-        zstd -d "${zst}" -o "${ROOTFS}" --force
-        rm -f "${zst}"
-    fi
-
-    if [[ ! -f "${DTB}" ]]; then
-        download_if_missing "${DTB}" "${art}/${dtb_rel:-openbmc/build/tmp/deploy/images/qemuarm/qemuarm.dtb}" "DTB" \
-            || { error "Could not download DTB. See QEMU_SETUP.md."; exit 1; }
-    fi
-
-    for f in "${KERNEL}" "${ROOTFS}" "${DTB}"; do
-        [[ -f "$f" ]] || { error "Image file still missing: $f"; exit 1; }
-    done
-    info "All image files present."
-else
-    info "OpenBMC image already cached in ${QEMU_IMG_DIR}."
 fi
+
+# Final check
+for f in "${KERNEL}" "${ROOTFS}" "${DTB}"; do
+    [[ -f "$f" ]] || { error "Image file missing after build: $f"; exit 1; }
+done
+info "OpenBMC image files ready:"
+info "  Kernel: $(du -sh "${KERNEL}" | cut -f1)  ${KERNEL}"
+info "  Rootfs: $(du -sh "${ROOTFS}" | cut -f1)  ${ROOTFS}"
+info "  DTB:    $(du -sh "${DTB}"    | cut -f1)  ${DTB}"
 
 # ── Boot QEMU ─────────────────────────────────────────────────────────────────
 rw_rootfs="${WORK_DIR}/rootfs-rw.ext4"

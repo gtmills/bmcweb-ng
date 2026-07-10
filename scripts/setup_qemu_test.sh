@@ -63,6 +63,15 @@ need_cmd zstd
 need_cmd ssh openssh-client
 need_cmd sshpass
 
+# qemu-system-arm from apt is self-contained (no libfdt dep issues).
+# libfdt1 is only needed if the Jenkins binary is used as a fallback.
+if ! command -v qemu-system-arm &>/dev/null; then
+    info "Installing qemu-system-arm from apt..."
+    sudo apt-get install -y qemu-system-arm libfdt1 >/dev/null 2>&1 || {
+        error "Cannot install qemu-system-arm. Please install it manually."; exit 1
+    }
+fi
+
 mkdir -p "${WORK_DIR}" "${QEMU_IMG_DIR}"
 
 # ── SKIP_BOOT: jump straight to tests if VM is already running ────────────────
@@ -76,23 +85,31 @@ else
 
 # ── step 1: download QEMU binary from OpenBMC Jenkins ─────────────────────────
 
-if [[ ! -f "${QEMU_BINARY}" ]]; then
-    info "Downloading QEMU binary from OpenBMC Jenkins..."
-    info "  URL: ${QEMU_URL}"
-    wget -q --show-progress -O "${QEMU_BINARY}" "${QEMU_URL}" || {
-        error "Failed to download QEMU binary from ${QEMU_URL}"
-        error "Check your network or see QEMU_SETUP.md for manual steps."
-        exit 1
-    }
-    chmod +x "${QEMU_BINARY}"
-    info "QEMU downloaded: $(du -sh "${QEMU_BINARY}" | cut -f1)"
+# Prefer system-installed qemu-system-arm; fall back to Jenkins download.
+if command -v qemu-system-arm &>/dev/null; then
+    QEMU_BINARY="$(command -v qemu-system-arm)"
+    info "Using system qemu-system-arm: ${QEMU_BINARY}"
 else
-    info "QEMU binary already present: ${QEMU_BINARY}"
+    if [[ ! -f "${QEMU_BINARY}" ]]; then
+        info "Downloading QEMU binary from OpenBMC Jenkins..."
+        info "  URL: ${QEMU_URL}"
+        sudo apt-get install -y libfdt1 >/dev/null 2>&1 || true
+        wget -q --show-progress -O "${QEMU_BINARY}" "${QEMU_URL}" || {
+            error "Failed to download QEMU binary from ${QEMU_URL}"
+            error "Check your network or see QEMU_SETUP.md for manual steps."
+            exit 1
+        }
+        chmod +x "${QEMU_BINARY}"
+        info "QEMU downloaded: $(du -sh "${QEMU_BINARY}" | cut -f1)"
+    else
+        info "QEMU binary already present: ${QEMU_BINARY}"
+    fi
 fi
 
 # Verify the binary can execute
 if ! "${QEMU_BINARY}" --version 2>/dev/null | grep -q "QEMU"; then
-    error "Downloaded QEMU binary does not execute correctly or is not a QEMU binary."
+    error "qemu-system-arm at '${QEMU_BINARY}' failed to execute."
+    error "Try: sudo apt-get install -y qemu-system-arm libfdt1"
     file "${QEMU_BINARY}" 2>/dev/null || true
     exit 1
 fi

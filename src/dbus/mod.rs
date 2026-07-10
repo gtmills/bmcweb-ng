@@ -332,9 +332,6 @@ impl MockDbusClient {
         self.properties.write().unwrap().insert(key, value);
     }
 
-    fn make_key(path: &str, interface: &str, property: &str) -> String {
-        mock_key(path, interface, property)
-    }
 }
 
 fn mock_key(path: &str, interface: &str, property: &str) -> String {
