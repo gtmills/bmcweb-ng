@@ -1,0 +1,20 @@
+# Cargo configuration for bmcweb-ng
+#
+# Cross-compilation targets used by the QEMU test workflow:
+#
+#   arm-unknown-linux-gnueabihf   — 32-bit ARMv7 hard-float (OpenBMC qemuarm)
+#   aarch64-unknown-linux-gnu     — 64-bit ARM (future OpenBMC AST2700 targets)
+#
+# On Ubuntu/Debian install the linkers with:
+#   sudo apt-get install gcc-arm-linux-gnueabihf gcc-aarch64-linux-gnu
+
+[target.x86_64-unknown-linux-gnu]
+linker = "x86_64-linux-gnu-gcc"
+
+# 32-bit ARMv7 hard-float — matches OpenBMC qemuarm (versatilepb, Cortex-A9)
+[target.arm-unknown-linux-gnueabihf]
+linker = "arm-linux-gnueabihf-gcc"
+
+# 64-bit ARM — for future OpenBMC AST2700 / AArch64 BMC targets
+[target.aarch64-unknown-linux-gnu]
+linker = "aarch64-linux-gnu-gcc"

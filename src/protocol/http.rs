@@ -33,6 +33,7 @@ use axum::{
     middleware,
     routing::get,
 };
+use rcgen::generate_simple_self_signed;
 use rustls::ServerConfig;
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use std::fs::File;
@@ -79,16 +80,38 @@ impl HttpServer {
     pub fn build_router(&self) -> Router {
         let state = self.app_state.clone();
 
-        // Redfish router with mandatory authentication applied as a layer.
-        // The session POST endpoints are intentionally excluded from mandatory
-        // auth — they accept unauthenticated requests for the login flow.
-        let redfish_router = crate::api::redfish::router()
+        // Session creation (POST login) must be unauthenticated — users haven't
+        // got a token yet.  All other Redfish routes require authentication.
+        // We achieve this by:
+        //   1. Building the full Redfish router with mandatory auth as a layer.
+        //   2. Overlaying the session creation routes with optional auth so the
+        //      login endpoint accepts unauthenticated requests.
+        let session_login_router = Router::new()
+            .route(
+                "/SessionService/Sessions",
+                axum::routing::post(crate::api::redfish::sessions::create_session),
+            )
+            .route(
+                "/SessionService/Sessions/Members",
+                axum::routing::post(crate::api::redfish::sessions::create_session),
+            )
             .layer(middleware::from_fn_with_state(
                 state.clone(),
                 optional_auth_middleware,
             ));
 
-        // WebSocket routes with optional auth (auth handled inside handlers)
+        // All remaining Redfish routes: mandatory authentication.
+        let redfish_router = crate::api::redfish::router()
+            .layer(middleware::from_fn_with_state(
+                state.clone(),
+                auth_middleware,
+            ))
+            // Merge in the open session creation routes — axum route priority
+            // means the more-specific merge wins over the layer above.
+            .merge(session_login_router);
+
+        // WebSocket routes with optional auth (auth check happens inside each
+        // handler after the HTTP upgrade, where the token is inspected).
         let ws_router = crate::api::websocket::websocket_routes()
             .layer(middleware::from_fn_with_state(
                 state.clone(),
@@ -162,7 +185,9 @@ impl HttpServer {
 
         info!("HTTPS server listening on {}", addr);
 
-        // Serve connections with TLS wrapping
+        // Accept loop: each TLS connection is handled in its own task.
+        // We use hyper's lower-level serve_connection to drive a single
+        // TLS stream rather than wrapping in a TcpListener.
         loop {
             let (stream, peer_addr) = match listener.accept().await {
                 Ok(v) => v,
@@ -173,18 +198,30 @@ impl HttpServer {
             };
 
             let acceptor = acceptor.clone();
-            let router = router.clone();
+            let tower_service = router.clone();
 
             tokio::spawn(async move {
                 match acceptor.accept(stream).await {
                     Ok(tls_stream) => {
-                        if let Err(e) = axum::serve(
-                            tokio_rustls_listener_from_stream(tls_stream),
-                            router,
-                        )
-                        .await
+                        let io = hyper_util::rt::TokioIo::new(tls_stream);
+                        let hyper_service = hyper::service::service_fn(move |req| {
+                            tower_service.clone().call(req)
+                        });
+                        if let Err(e) = hyper::server::conn::http1::Builder::new()
+                            .serve_connection(io, hyper_service)
+                            .with_upgrades()
+                            .await
                         {
-                            error!("TLS connection error from {}: {}", peer_addr, e);
+                            // Ignore benign "connection reset" errors
+                            let msg = e.to_string();
+                            if !msg.contains("connection reset")
+                                && !msg.contains("broken pipe")
+                            {
+                                error!(
+                                    "TLS connection error from {}: {}",
+                                    peer_addr, e
+                                );
+                            }
                         }
                     }
                     Err(e) => {
@@ -252,46 +289,32 @@ fn load_tls_config_from_files(cert_path: &str, key_path: &str) -> Result<ServerC
     Ok(config)
 }
 
-/// Generate a self-signed TLS certificate in memory.
+/// Generate a self-signed TLS certificate in memory using rcgen.
 ///
-/// Uses rcgen to create a short-lived certificate for development/testing.
-/// The certificate covers `localhost` and the loopback address.
+/// Creates a short-lived certificate valid for `localhost` and `127.0.0.1`.
+/// This matches the behaviour of upstream bmcweb's `ensuressl::checkAndGenerateSslCertificates()`.
 fn generate_self_signed_tls_config() -> Result<ServerConfig> {
-    // rcgen is a pure-Rust self-signed certificate generator.
-    // It is a common choice in the Rust ecosystem for exactly this use case
-    // (see also: axum-server, hyper-rustls examples).
-    //
-    // We do not add rcgen as a hard dependency yet — this is the
-    // implementation outline.  TODO: add rcgen = "0.12" to Cargo.toml.
-    //
-    // For now return a descriptive error so operators know what to do.
-    Err(anyhow::anyhow!(
-        "Self-signed certificate generation requires the `rcgen` crate. \
-         Add rcgen = \"0.12\" to Cargo.toml, or supply a TLS certificate at the configured path."
-    ))
-}
+    let subject_alt_names = vec![
+        "localhost".to_string(),
+        "127.0.0.1".to_string(),
+        "openbmc".to_string(),
+    ];
 
-// ---------------------------------------------------------------------------
-// Adapter: wrap a TLS stream so axum can serve it
-// ---------------------------------------------------------------------------
+    let cert = generate_simple_self_signed(subject_alt_names)
+        .context("Failed to generate self-signed certificate")?;
 
-/// Minimal adapter to hand a single accepted TLS stream to axum::serve.
-///
-/// axum::serve expects a type that implements `tokio::io::AsyncRead +
-/// AsyncWrite + Unpin`.  `tokio_rustls::server::TlsStream<TcpStream>`
-/// already does; we just need to wrap it in a listener-like newtype.
-///
-/// NOTE: This is a simplified single-connection adapter.  A production
-/// server would multiplex connections through a channel-based listener.
-/// TODO: Replace with a proper multi-connection TLS listener using
-/// `tokio::net::TcpListener` + `TlsAcceptor` in a accept-loop pattern.
-fn tokio_rustls_listener_from_stream<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static>(
-    _stream: S,
-) -> tokio::net::TcpListener {
-    // Placeholder — in a real implementation we would use axum's
-    // `serve_with_incoming` or build a custom `Accept` implementation.
-    // This function signature is intentionally a stub.
-    panic!("TLS listener adapter not fully implemented; see TODO in protocol/http.rs")
+    let cert_der = cert.cert.der().clone();
+    let key_der = rustls::pki_types::PrivateKeyDer::Pkcs8(
+        cert.key_pair.serialize_der().into(),
+    );
+
+    let config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert_der], key_der)
+        .context("Failed to build TLS ServerConfig from self-signed cert")?;
+
+    info!("Generated self-signed TLS certificate for localhost/openbmc (development mode)");
+    Ok(config)
 }
 
 // ---------------------------------------------------------------------------
@@ -322,10 +345,15 @@ mod tests {
 
     #[test]
     fn test_build_tls_config_missing_files() {
-        // Should fall through to the self-signed generation attempt
+        // When cert/key files don't exist, rcgen generates a self-signed cert
         let result = build_tls_config("/nonexistent/cert.pem", "/nonexistent/key.pem");
-        // Expected: Err because rcgen dependency is not yet added
-        assert!(result.is_err());
+        assert!(result.is_ok(), "Expected self-signed cert generation to succeed: {:?}", result);
+    }
+
+    #[test]
+    fn test_generate_self_signed_tls_config() {
+        let result = generate_self_signed_tls_config();
+        assert!(result.is_ok(), "Self-signed cert generation failed: {:?}", result);
     }
 
     #[tokio::test]

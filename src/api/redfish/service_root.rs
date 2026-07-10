@@ -2,14 +2,19 @@
 //!
 //! Implements /redfish/v1/ endpoint
 
-use axum::{response::Json, http::StatusCode};
+use axum::{extract::State, response::Json, http::StatusCode};
 use serde_json::{json, Value};
+use std::sync::Arc;
+
+use crate::AppState;
 
 /// GET /redfish/v1/
-pub async fn get_service_root() -> Result<Json<Value>, StatusCode> {
-    // Generate a UUID (in production, this should be persistent)
-    let uuid = uuid::Uuid::new_v4().to_string();
-    
+pub async fn get_service_root(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Value>, StatusCode> {
+    // Use the persistent system UUID from AppState (stable across restarts)
+    let uuid = state.system_uuid.clone();
+
     let response = json!({
         "@odata.type": "#ServiceRoot.v1_15_0.ServiceRoot",
         "@odata.id": "/redfish/v1",
@@ -91,14 +96,18 @@ pub async fn get_service_root() -> Result<Json<Value>, StatusCode> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
 
     #[tokio::test]
     async fn test_service_root() {
-        let result = get_service_root().await;
+        let config = Config::default();
+        let state = Arc::new(AppState::new(config));
+
+        let result = get_service_root(State(state)).await;
         assert!(result.is_ok());
-        
+
         let json = result.unwrap().0;
         assert_eq!(json["@odata.type"], "#ServiceRoot.v1_15_0.ServiceRoot");
-        assert_eq!(json["RedfishVersion"], "1.15.0");
+        assert_eq!(json["RedfishVersion"], "1.17.0");
     }
 }

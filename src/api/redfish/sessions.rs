@@ -11,18 +11,17 @@
 //! Reference: DMTF DSP0266 Redfish Specification, SessionService schema v1.0.2
 
 use axum::{
-    extract::{Extension, Path, State},
+    extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json, Response},
     Json as JsonBody,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
-use crate::auth::basic::parse_basic_auth_header;
-use crate::auth::session::{SessionStore, SessionType, UserSession};
+use crate::auth::session::{SessionType, UserSession};
 use crate::AppState;
 
 /// Request body for creating a new session (POST /redfish/v1/SessionService/Sessions)
@@ -174,12 +173,7 @@ pub async fn create_session(
             .into_response();
     }
 
-    // Authenticate via PAM (Basic auth header construction for reuse)
-    use base64::{Engine as _, engine::general_purpose};
-    let credentials = format!("{}:{}", body.username, body.password);
-    let encoded = general_purpose::STANDARD.encode(&credentials);
-    let fake_basic = format!("Basic {}", encoded);
-
+    // Authenticate via PAM
     match crate::auth::basic::authenticate_with_pam(&body.username, &body.password) {
         Ok(_) => {}
         Err(e) => {

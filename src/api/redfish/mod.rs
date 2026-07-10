@@ -58,15 +58,14 @@ pub fn router() -> Router<Arc<AppState>> {
                get(managers::get_manager_ethernet_interface))
         .route("/Managers/:manager_id/LogServices",
                get(managers::get_manager_log_services))
-        // SessionService routes
+        // SessionService routes.
+        // NOTE: POST /SessionService/Sessions (login) is intentionally NOT
+        // registered here — it is served from the unauthenticated login router
+        // built in http.rs so it can bypass the mandatory auth middleware.
         .route("/SessionService", get(sessions::get_session_service))
         .route("/SessionService", patch(sessions::patch_session_service))
         .route("/SessionService/Sessions",
-               get(sessions::get_sessions_collection)
-               .post(sessions::create_session))
-        // Alias per DSP0266 §13.3.3
-        .route("/SessionService/Sessions/Members",
-               post(sessions::create_session))
+               get(sessions::get_sessions_collection))
         .route("/SessionService/Sessions/:session_id",
                get(sessions::get_session)
                .delete(sessions::delete_session))
