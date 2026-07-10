@@ -78,6 +78,12 @@ apt_install() {
     done
 }
 
+# Enable universe repo so sshpass (and other community packages) are available.
+if ! grep -r "^deb.*universe" /etc/apt/sources.list /etc/apt/sources.list.d/ &>/dev/null; then
+    info "Enabling Ubuntu universe repository..."
+    sudo add-apt-repository -y universe 2>/dev/null || true
+fi
+
 sudo apt-get update -qq 2>/dev/null || true
 
 apt_install \
