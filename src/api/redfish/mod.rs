@@ -26,14 +26,38 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/Systems/:system_id", get(systems::get_system))
         .route("/Systems/:system_id/Actions/ComputerSystem.Reset",
                post(systems::reset_system))
+        .route("/Systems/:system_id/Processors",
+               get(systems::get_processors_collection))
+        .route("/Systems/:system_id/Memory",
+               get(systems::get_memory_collection))
+        .route("/Systems/:system_id/Storage",
+               get(systems::get_storage_collection))
+        .route("/Systems/:system_id/EthernetInterfaces",
+               get(systems::get_ethernet_interfaces_collection))
+        .route("/Systems/:system_id/LogServices",
+               get(systems::get_system_log_services))
         // Chassis routes
         .route("/Chassis", get(chassis::get_chassis_collection))
         .route("/Chassis/:chassis_id", get(chassis::get_chassis))
+        .route("/Chassis/:chassis_id/Power", get(chassis::get_chassis_power))
+        .route("/Chassis/:chassis_id/Thermal", get(chassis::get_chassis_thermal))
+        .route("/Chassis/:chassis_id/Sensors", get(chassis::get_chassis_sensors))
+        .route("/Chassis/:chassis_id/NetworkAdapters",
+               get(chassis::get_chassis_network_adapters))
         // Managers routes
         .route("/Managers", get(managers::get_managers_collection))
         .route("/Managers/:manager_id", get(managers::get_manager))
         .route("/Managers/:manager_id/Actions/Manager.Reset",
                post(managers::reset_manager))
+        .route("/Managers/:manager_id/NetworkProtocol",
+               get(managers::get_network_protocol)
+               .patch(managers::patch_network_protocol))
+        .route("/Managers/:manager_id/EthernetInterfaces",
+               get(managers::get_manager_ethernet_interfaces))
+        .route("/Managers/:manager_id/EthernetInterfaces/:nic_id",
+               get(managers::get_manager_ethernet_interface))
+        .route("/Managers/:manager_id/LogServices",
+               get(managers::get_manager_log_services))
         // SessionService routes
         .route("/SessionService", get(sessions::get_session_service))
         .route("/SessionService", patch(sessions::patch_session_service))
