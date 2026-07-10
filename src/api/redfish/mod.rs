@@ -12,6 +12,8 @@ pub mod managers;
 pub mod service_root;
 pub mod sessions;
 pub mod systems;
+pub mod task_service;
+pub mod update_service;
 
 use crate::AppState;
 
@@ -66,13 +68,26 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/EventService/Subscriptions/:sub_id",
                get(event_service::get_subscription)
                .delete(event_service::delete_subscription))
+        // TaskService routes
+        .route("/TaskService", get(task_service::get_task_service))
+        .route("/TaskService/Tasks",
+               get(task_service::get_tasks_collection))
+        .route("/TaskService/Tasks/:task_id",
+               get(task_service::get_task)
+               .delete(task_service::delete_task))
+        // UpdateService routes
+        .route("/UpdateService", get(update_service::get_update_service))
+        .route("/UpdateService/FirmwareInventory",
+               get(update_service::get_firmware_inventory_collection))
+        .route("/UpdateService/FirmwareInventory/:firmware_id",
+               get(update_service::get_firmware_inventory))
+        .route("/UpdateService/Actions/UpdateService.SimpleUpdate",
+               post(update_service::simple_update))
         // TODO: Add more Redfish resource routes:
-        // .route("/TaskService", get(task_service::get_task_service))
-        // .route("/UpdateService", get(update_service::get_update_service))
+        // .route("/TelemetryService", get(telemetry_service::get_telemetry_service))
+        // .route("/CertificateService", get(certificate_service::get_certificate_service))
 }
 
 // TODO: Add more Redfish resource modules:
-// - task_service - Task management
-// - update_service - Firmware updates
 // - telemetry - Telemetry service
 // - certificates - Certificate management
