@@ -30,6 +30,10 @@
 
 set -euo pipefail
 
+# Ensure ~/.cargo/bin is on PATH regardless of whether this is an interactive
+# shell (wsl -- bash -c "..." does not source ~/.bashrc or ~/.cargo/env).
+export PATH="${HOME}/.cargo/bin:${PATH}"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 WORK_DIR="${REPO_DIR}/target/qemu-test"
