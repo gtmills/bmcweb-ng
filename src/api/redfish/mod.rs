@@ -5,6 +5,7 @@
 use axum::{Router, routing::{delete, get, patch, post}};
 use std::sync::Arc;
 
+pub mod accounts;
 pub mod chassis;
 pub mod managers;
 pub mod service_root;
@@ -42,15 +43,24 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/SessionService/Sessions/:session_id",
                get(sessions::get_session)
                .delete(sessions::delete_session))
+        // AccountService routes
+        .route("/AccountService", get(accounts::get_account_service))
+        .route("/AccountService/Accounts",
+               get(accounts::get_accounts_collection)
+               .post(accounts::create_account))
+        .route("/AccountService/Accounts/:account_id",
+               get(accounts::get_account)
+               .patch(accounts::patch_account)
+               .delete(accounts::delete_account))
+        .route("/AccountService/Roles", get(accounts::get_roles_collection))
+        .route("/AccountService/Roles/:role_id", get(accounts::get_role))
         // TODO: Add more Redfish resource routes:
-        // .route("/AccountService", get(accounts::get_account_service))
         // .route("/EventService", get(event_service::get_event_service))
         // .route("/TaskService", get(task_service::get_task_service))
         // .route("/UpdateService", get(update_service::get_update_service))
 }
 
 // TODO: Add more Redfish resource modules:
-// - accounts - Account management
 // - event_service - Event subscriptions
 // - task_service - Task management
 // - update_service - Firmware updates
