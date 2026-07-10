@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 pub mod accounts;
 pub mod chassis;
+pub mod event_service;
 pub mod managers;
 pub mod service_root;
 pub mod sessions;
@@ -54,14 +55,23 @@ pub fn router() -> Router<Arc<AppState>> {
                .delete(accounts::delete_account))
         .route("/AccountService/Roles", get(accounts::get_roles_collection))
         .route("/AccountService/Roles/:role_id", get(accounts::get_role))
+        // EventService routes
+        .route("/EventService", get(event_service::get_event_service)
+               .patch(event_service::patch_event_service))
+        .route("/EventService/Actions/EventService.SubmitTestEvent",
+               post(event_service::submit_test_event))
+        .route("/EventService/Subscriptions",
+               get(event_service::get_subscriptions_collection)
+               .post(event_service::create_subscription))
+        .route("/EventService/Subscriptions/:sub_id",
+               get(event_service::get_subscription)
+               .delete(event_service::delete_subscription))
         // TODO: Add more Redfish resource routes:
-        // .route("/EventService", get(event_service::get_event_service))
         // .route("/TaskService", get(task_service::get_task_service))
         // .route("/UpdateService", get(update_service::get_update_service))
 }
 
 // TODO: Add more Redfish resource modules:
-// - event_service - Event subscriptions
 // - task_service - Task management
 // - update_service - Firmware updates
 // - telemetry - Telemetry service
