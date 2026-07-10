@@ -11,7 +11,6 @@ use uuid::Uuid;
 use anyhow::{Result, anyhow};
 use tracing::{debug, info, warn};
 
-use super::task::Task;
 
 /// Update target type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

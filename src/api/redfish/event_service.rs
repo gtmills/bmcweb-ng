@@ -134,7 +134,7 @@ pub async fn get_event_service(
 ) -> Result<Json<Value>, StatusCode> {
     debug!("GET /redfish/v1/EventService");
 
-    let sub_count = state
+    let _sub_count = state
         .event_service
         .as_ref()
         .map(|s| s.subscription_count())
