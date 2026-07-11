@@ -69,7 +69,8 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/Managers/:manager_id/EthernetInterfaces",
                get(managers::get_manager_ethernet_interfaces))
         .route("/Managers/:manager_id/EthernetInterfaces/:nic_id",
-               get(managers::get_manager_ethernet_interface))
+               get(managers::get_manager_ethernet_interface)
+               .patch(managers::patch_manager_ethernet_interface))
         .route("/Managers/:manager_id/LogServices",
                get(managers::get_manager_log_services))
         // SessionService routes.

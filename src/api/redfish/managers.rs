@@ -417,7 +417,26 @@ pub async fn get_manager_ethernet_interface(
     );
     validate_manager_id(&manager_id)?;
 
-    if nic_id != "eth0" {
+    // Validate that this NIC actually exists in DBus before serving it.
+    // Accept any NIC id present in the network tree; eth0 is always valid.
+    if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        if let Ok(objects) = client
+            .get_managed_objects("xyz.openbmc_project.Network", "/xyz/openbmc_project/network")
+            .await
+        {
+            let nic_iface = "xyz.openbmc_project.Network.EthernetInterface";
+            let known: Vec<_> = objects
+                .iter()
+                .filter(|(_, ifaces)| ifaces.contains_key(nic_iface))
+                .filter_map(|(path, _)| path.rsplit('/').next().map(|s| s.to_string()))
+                .collect();
+            if !known.is_empty() && !known.iter().any(|n| n == &nic_id) {
+                warn!("NIC '{}' not found (known: {:?})", nic_id, known);
+                return Err(StatusCode::NOT_FOUND);
+            }
+        }
+    } else if nic_id != "eth0" {
         warn!("NIC '{}' not found on manager '{}'", nic_id, manager_id);
         return Err(StatusCode::NOT_FOUND);
     }
@@ -508,6 +527,108 @@ pub async fn get_manager_ethernet_interface(
         },
         "Status": { "State": "Enabled", "Health": "OK" }
     })))
+}
+
+/// PATCH /redfish/v1/Managers/{manager_id}/EthernetInterfaces/{nic_id}
+///
+/// Applies static IP address configuration via DBus.
+///
+/// OpenBMC IP configuration:
+///   Service:   xyz.openbmc_project.Network
+///   Object:    /xyz/openbmc_project/network/<nic_id>
+///   Method:    xyz.openbmc_project.Network.IP.Create
+///     args: (string address_type "ipv4", string address, uint8 prefix_len, string gateway)
+///
+/// Also supports:
+///   DHCPEnabled  → xyz.openbmc_project.Network.EthernetInterface / DHCPEnabled (bool)
+///   MACAddress   → xyz.openbmc_project.Network.EthernetInterface / MACAddress (string)
+pub async fn patch_manager_ethernet_interface(
+    State(state): State<Arc<AppState>>,
+    Path((manager_id, nic_id)): Path<(String, String)>,
+    JsonBody(body): JsonBody<Value>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!(
+        "PATCH /redfish/v1/Managers/{}/EthernetInterfaces/{}",
+        manager_id, nic_id
+    );
+    validate_manager_id(&manager_id)?;
+
+    if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        let dbus_path = format!("/xyz/openbmc_project/network/{}", nic_id);
+        let net_iface = "xyz.openbmc_project.Network.EthernetInterface";
+
+        // Toggle DHCP if DHCPv4.DHCPEnabled is provided
+        if let Some(dhcp_enabled) = body
+            .get("DHCPv4")
+            .and_then(|d| d.get("DHCPEnabled"))
+            .and_then(|v| v.as_bool())
+        {
+            if let Err(e) = client
+                .set_property(
+                    &dbus_path,
+                    net_iface,
+                    "DHCPEnabled",
+                    serde_json::json!(dhcp_enabled),
+                )
+                .await
+            {
+                warn!("Failed to set DHCPEnabled on {}: {}", nic_id, e);
+            } else {
+                info!("DHCPEnabled={} on {} via DBus", dhcp_enabled, nic_id);
+            }
+        }
+
+        // Set MACAddress if provided (some systems allow BMC MAC override)
+        if let Some(mac) = body.get("MACAddress").and_then(|v| v.as_str()) {
+            if let Err(e) = client
+                .set_property(
+                    &dbus_path,
+                    net_iface,
+                    "MACAddress",
+                    serde_json::json!(mac),
+                )
+                .await
+            {
+                warn!("Failed to set MACAddress on {}: {}", nic_id, e);
+            } else {
+                info!("MACAddress set to {} on {} via DBus", mac, nic_id);
+            }
+        }
+
+        // Add a static IPv4 address if IPv4StaticAddresses is provided
+        if let Some(statics) = body.get("IPv4StaticAddresses").and_then(|v| v.as_array()) {
+            for addr in statics {
+                let address = addr.get("Address").and_then(|v| v.as_str()).unwrap_or("");
+                let prefix = addr.get("SubnetMask").and_then(|v| v.as_u64()).unwrap_or(24) as u8;
+                let gateway = addr.get("Gateway").and_then(|v| v.as_str()).unwrap_or("");
+                if !address.is_empty() {
+                    let args = serde_json::json!({
+                        "AddressType": "ipv4",
+                        "Address": address,
+                        "PrefixLength": prefix,
+                        "Gateway": gateway
+                    });
+                    match client
+                        .call_method(
+                            "xyz.openbmc_project.Network",
+                            &dbus_path,
+                            "xyz.openbmc_project.Network.IP.Create",
+                            "IP",
+                            Some(&args),
+                        )
+                        .await
+                    {
+                        Ok(_) => info!("Static IP {}/{} set on {} via DBus", address, prefix, nic_id),
+                        Err(e) => warn!("Failed to set static IP on {}: {}", nic_id, e),
+                    }
+                }
+            }
+        }
+    }
+
+    // Return the updated NIC resource
+    get_manager_ethernet_interface(State(state), Path((manager_id, nic_id))).await
 }
 
 // ---------------------------------------------------------------------------

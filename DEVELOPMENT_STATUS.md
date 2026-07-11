@@ -144,6 +144,13 @@ bmcweb-ng/
 9. **DBus chassis enumeration** — `GET /Chassis` and `GET /Chassis/{id}` enumerate from inventory
 10. **Processor + Memory instances** — `GET /Systems/system/Processors/{id}` and `/Memory/{id}` with DBus data
 
+### ✅ Completed in iteration 4 (DBus wiring — round 4)
+
+1. **Storage collection from DBus** — `GET /Systems/system/Storage` enumerates `Inventory.Item.StorageController` objects; synthesises a "Storage/1" entry if only `Item.Drive` objects are present
+2. **PATCH EthernetInterface** — `PATCH /Managers/bmc/EthernetInterfaces/{nic_id}` handles `DHCPv4.DHCPEnabled`, `MACAddress`, `IPv4StaticAddresses` via `set_property` and `call_method`
+3. **Dynamic NIC validation** — `GET /Managers/bmc/EthernetInterfaces/{nic_id}` validates NIC id against live DBus NIC list instead of hard-coded `eth0`
+4. **Extended test suite** — Round 3 checks added to `qemu_test_v3.sh`: boot target validity, EventLog/Entries type + Members, PATCH /Systems/system, PATCH NetworkProtocol
+
 ### ✅ Completed in iteration 3 (DBus wiring — round 3)
 
 1. **Boot override settings from DBus** — `GET /Systems/system` now returns live `BootSourceOverrideTarget/Enabled/Mode` from `xyz.openbmc_project.Control.Boot.Source` at `/control/host0/boot` and `/control/host0/boot/one_time`

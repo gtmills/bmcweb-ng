@@ -981,20 +981,72 @@ fn ms_epoch_to_rfc3339(ms: u64) -> String {
 }
 
 /// GET /redfish/v1/Systems/{system_id}/Storage
+///
+/// Enumerates storage controllers from DBus inventory.
+/// On OpenBMC, storage controllers appear at:
+///   /xyz/openbmc_project/inventory/…/storageN
+///   interface: xyz.openbmc_project.Inventory.Item.StorageController
+/// Physical drives with xyz.openbmc_project.Inventory.Item.Drive synthesise
+/// a single "1" controller entry when no explicit controller objects exist.
 pub async fn get_storage_collection(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Path(system_id): Path<String>,
 ) -> Result<Json<Value>, StatusCode> {
     debug!("GET /redfish/v1/Systems/{}/Storage", system_id);
     validate_system_id(&system_id)?;
 
-    // TODO: Enumerate storage controllers from DBus
+    let members = if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        match client
+            .get_managed_objects(
+                "xyz.openbmc_project.Inventory.Manager",
+                "/xyz/openbmc_project/inventory",
+            )
+            .await
+        {
+            Ok(objects) => {
+                let ctrl_iface = "xyz.openbmc_project.Inventory.Item.StorageController";
+                let drive_iface = "xyz.openbmc_project.Inventory.Item.Drive";
+
+                let mut controllers: Vec<Value> = objects
+                    .iter()
+                    .filter(|(_, ifaces)| ifaces.contains_key(ctrl_iface))
+                    .map(|(path, _)| {
+                        let id = path.rsplit('/').next().unwrap_or("storage0").to_string();
+                        json!({ "@odata.id": format!("/redfish/v1/Systems/system/Storage/{}", id) })
+                    })
+                    .collect();
+
+                // Synthesise one controller if drives exist but no explicit controller object
+                if controllers.is_empty() {
+                    let has_drives = objects
+                        .iter()
+                        .any(|(_, ifaces)| ifaces.contains_key(drive_iface));
+                    if has_drives {
+                        controllers.push(json!({
+                            "@odata.id": "/redfish/v1/Systems/system/Storage/1"
+                        }));
+                    }
+                }
+
+                controllers.sort_by_key(|v| v["@odata.id"].as_str().unwrap_or("").to_string());
+                controllers
+            }
+            Err(e) => {
+                warn!("Failed to enumerate storage controllers from DBus: {}", e);
+                vec![]
+            }
+        }
+    } else {
+        vec![]
+    };
+
     Ok(Json(json!({
         "@odata.type": "#StorageCollection.StorageCollection",
         "@odata.id": "/redfish/v1/Systems/system/Storage",
         "Name": "Storage Collection",
-        "Members@odata.count": 0,
-        "Members": []
+        "Members@odata.count": members.len(),
+        "Members": members
     })))
 }
 

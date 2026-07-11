@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Storage collection from DBus** (`systems.rs`) —
+  `GET /Systems/system/Storage` now enumerates storage controller objects via
+  `GetManagedObjects` filtering on `Inventory.Item.StorageController`.
+  When no explicit controller objects exist, synthesises one "Storage/1" entry
+  if any `Inventory.Item.Drive` objects are present.
+
+- **PATCH EthernetInterface** (`managers.rs`) —
+  `PATCH /Managers/bmc/EthernetInterfaces/{nic_id}` handles `DHCPv4.DHCPEnabled`,
+  `MACAddress`, and `IPv4StaticAddresses`. Static IPs call
+  `xyz.openbmc_project.Network.IP.Create / IP` via `call_method`.
+  Returns the updated NIC resource after applying changes.
+
+- **Dynamic NIC validation** (`managers.rs`) —
+  `GET /Managers/bmc/EthernetInterfaces/{nic_id}` now validates the NIC id
+  against the live DBus NIC list (via `GetManagedObjects`) rather than
+  hard-coding `eth0`.
+
 - **Boot override settings** (`systems.rs`) — `GET /Systems/system` now reads
   `BootSource` from `xyz.openbmc_project.Control.Boot.Source` at
   `/xyz/openbmc_project/control/host0/boot` and the one-time-boot path.
