@@ -20,12 +20,13 @@
 //! Reference: DMTF Redfish ComputerSystem schema v1.20.0
 //!
 //! OpenBMC DBus sources:
-//!   - Power state:   xyz.openbmc_project.State.Host / CurrentHostState
-//!   - Boot settings: xyz.openbmc_project.Control.Boot.Mode / BootMode
-//!                    xyz.openbmc_project.Control.Boot.Source / BootSource
-//!   - Log entries:   xyz.openbmc_project.Logging / GetAll on /xyz/openbmc_project/logging/entry/<N>
-//!   - Processor inventory: xyz.openbmc_project.Inventory.Item.Cpu
-//!   - Memory inventory:    xyz.openbmc_project.Inventory.Item.Dimm
+//!
+//! - Power state:   xyz.openbmc_project.State.Host / CurrentHostState
+//! - Boot settings: xyz.openbmc_project.Control.Boot.Mode / BootMode,
+//!   xyz.openbmc_project.Control.Boot.Source / BootSource
+//! - Log entries:   xyz.openbmc_project.Logging / GetAll on /xyz/openbmc_project/logging/entry/<N>
+//! - Processor inventory: xyz.openbmc_project.Inventory.Item.Cpu
+//! - Memory inventory:    xyz.openbmc_project.Inventory.Item.Dimm
 
 use axum::{
     extract::{Path, State},
@@ -851,7 +852,7 @@ pub async fn get_event_log_entries(
                         ifaces.contains_key(entry_iface)
                             && path.contains("/logging/entry/")
                     })
-                    .filter_map(|(path, ifaces)| {
+                    .map(|(path, ifaces)| {
                         let props = &ifaces[entry_iface];
                         let id_num = path
                             .rsplit('/')
@@ -887,11 +888,11 @@ pub async fn get_event_log_entries(
                             "Created": created,
                             "Message": msg
                         });
-                        Some((id_num, entry))
+                        (id_num, entry)
                     })
                     .collect();
                 // Sort newest-first (descending by id)
-                entries.sort_by(|a, b| b.0.cmp(&a.0));
+                entries.sort_by_key(|&(id, _)| std::cmp::Reverse(id));
                 entries.into_iter().map(|(_, v)| v).collect()
             }
             Err(e) => {
@@ -1018,8 +1019,6 @@ fn obmc_severity_to_redfish(raw: &str) -> &'static str {
         "Critical"
     } else if raw.ends_with(".Warning") {
         "Warning"
-    } else if raw.ends_with(".Notice") || raw.ends_with(".Informational") || raw.ends_with(".Debug") {
-        "OK"
     } else {
         "OK"
     }

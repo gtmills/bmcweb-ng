@@ -315,7 +315,7 @@ impl UpdateService {
         let to_remove: Vec<String> = operations
             .iter()
             .filter(|(_, op)| {
-                op.completed_at.map_or(false, |completed| completed < cutoff)
+                op.completed_at.is_some_and(|completed| completed < cutoff)
             })
             .map(|(id, _)| id.clone())
             .collect();

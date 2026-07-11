@@ -316,7 +316,7 @@ impl TaskService {
         let to_remove: Vec<String> = tasks
             .iter()
             .filter(|(_, task)| {
-                task.is_complete() && task.end_time.map_or(false, |end| end < cutoff)
+                task.is_complete() && task.end_time.is_some_and(|end| end < cutoff)
             })
             .map(|(id, _)| id.clone())
             .collect();

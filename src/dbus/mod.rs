@@ -153,7 +153,7 @@ impl DbusClient for ZBusClient {
             .with_context(|| format!("Failed to get property {}.{} at {}", interface, property, path))?;
 
         // Convert zvariant::OwnedValue → serde_json::Value via serialization
-        let json_value = zvariant_to_json(value.into())
+        let json_value = zvariant_to_json(value)
             .with_context(|| format!("Failed to convert DBus value for {}.{}", interface, property))?;
 
         Ok(json_value)
@@ -231,7 +231,7 @@ impl DbusClient for ZBusClient {
 
         let mut result = HashMap::new();
         for (key, value) in props {
-            match zvariant_to_json(value.into()) {
+            match zvariant_to_json(value) {
                 Ok(v) => { result.insert(key, v); }
                 Err(e) => {
                     warn!("Failed to convert property '{}': {}", key, e);
@@ -326,7 +326,7 @@ impl DbusClient for ZBusClient {
         // We attempt to decode as OwnedValue first, then fall back to null.
         match reply_msg.body().deserialize::<OwnedValue>() {
             Ok(owned) => {
-                match zvariant_to_json(owned.into()) {
+                match zvariant_to_json(owned) {
                     Ok(v) => Ok(v),
                     Err(_) => Ok(Value::Null),
                 }
@@ -371,7 +371,7 @@ impl DbusClient for ZBusClient {
             for (iface_name, props) in interfaces {
                 let mut prop_map: HashMap<String, DbusValue> = HashMap::new();
                 for (prop_name, prop_value) in props {
-                    match zvariant_to_json(prop_value.into()) {
+                    match zvariant_to_json(prop_value) {
                         Ok(v) => { prop_map.insert(prop_name.to_string(), v); }
                         Err(e) => {
                             warn!("Skipping property '{}' on '{}': {}", prop_name, iface_name, e);
@@ -475,7 +475,7 @@ async fn call_method_hetero_array(
     };
 
     match reply.body().deserialize::<OwnedValue>() {
-        Ok(owned) => match zvariant_to_json(owned.into()) {
+        Ok(owned) => match zvariant_to_json(owned) {
             Ok(v) => Ok(v),
             Err(_) => Ok(Value::Null),
         },

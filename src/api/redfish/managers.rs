@@ -721,7 +721,7 @@ pub async fn get_manager_bmc_log_entries(
                         ifaces.contains_key(entry_iface)
                             && path.contains("/logging/entry/")
                     })
-                    .filter_map(|(path, ifaces)| {
+                    .map(|(path, ifaces)| {
                         let props = &ifaces[entry_iface];
                         let id_num = path
                             .rsplit('/')
@@ -768,10 +768,10 @@ pub async fn get_manager_bmc_log_entries(
                             "Created": created,
                             "Message": msg
                         });
-                        Some((id_num, entry))
+                        (id_num, entry)
                     })
                     .collect();
-                entries.sort_by(|a, b| b.0.cmp(&a.0));
+                entries.sort_by_key(|&(id, _)| std::cmp::Reverse(id));
                 entries.into_iter().map(|(_, v)| v).collect()
             }
             Err(e) => {

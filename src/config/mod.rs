@@ -54,8 +54,10 @@ impl Config {
         Ok(config)
     }
 
-    /// Get default configuration
-    pub fn default() -> Self {
+}
+
+impl Default for Config {
+    fn default() -> Self {
         Self {
             server: ServerConfig {
                 bind_address: "0.0.0.0".to_string(),

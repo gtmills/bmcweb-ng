@@ -47,8 +47,8 @@ impl fmt::Display for Privilege {
 }
 
 impl Privilege {
-    /// Parse a privilege name string.
-    pub fn from_str(s: &str) -> Option<Self> {
+    /// Parse a privilege name string, returning `None` for unrecognised names.
+    pub fn parse_name(s: &str) -> Option<Self> {
         match s {
             "Login" => Some(Privilege::Login),
             "ConfigureManager" => Some(Privilege::ConfigureManager),
@@ -274,9 +274,9 @@ mod tests {
 
     #[test]
     fn test_privilege_from_str() {
-        assert_eq!(Privilege::from_str("Login"), Some(Privilege::Login));
-        assert_eq!(Privilege::from_str("ConfigureManager"), Some(Privilege::ConfigureManager));
-        assert_eq!(Privilege::from_str("Unknown"), None);
+        assert_eq!(Privilege::parse_name("Login"), Some(Privilege::Login));
+        assert_eq!(Privilege::parse_name("ConfigureManager"), Some(Privilege::ConfigureManager));
+        assert_eq!(Privilege::parse_name("Unknown"), None);
     }
 
     #[test]
