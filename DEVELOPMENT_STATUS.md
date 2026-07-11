@@ -3,7 +3,7 @@
 ## Overview
 This document tracks the development progress of bmcweb-ng, a Rust rewrite of the OpenBMC bmcweb server.
 
-**Last Updated:** 2026-07-12
+**Last Updated:** 2026-07-13
 
 ## Project Structure
 
@@ -131,7 +131,7 @@ bmcweb-ng/
     - Service file with security hardening (NoNewPrivileges, PrivateTmp, etc.)
     - Socket activation support
 
-### ✅ Completed in this round (DBus wiring)
+### ✅ Completed in iteration 1 (DBus wiring — round 1)
 
 1. **Live PowerState** — `GET /Systems/system` reads `CurrentHostState` from DBus
 2. **Live FirmwareVersion** — `GET /Managers/bmc` reads `Version` from BMC image object
@@ -143,6 +143,16 @@ bmcweb-ng/
 8. **`set_property()` working** — `ZBusClient` can now write string/bool/int/float/string-array DBus properties
 9. **DBus chassis enumeration** — `GET /Chassis` and `GET /Chassis/{id}` enumerate from inventory
 10. **Processor + Memory instances** — `GET /Systems/system/Processors/{id}` and `/Memory/{id}` with DBus data
+
+### ✅ Completed in iteration 2 (DBus wiring — round 2)
+
+1. **AccountService full DBus wiring** — `GET /AccountService/Accounts` lists real users via `ListUsers`; `GET /Accounts/{id}` fetches live user info via `GetUserInfo`; `POST /Accounts` calls `CreateUser`; `PATCH /Accounts/{id}` writes `UserPrivilege`/`UserEnabled` via `set_property`; `DELETE /Accounts/{id}` calls `DeleteUser`
+2. **Chassis Power sensors** — `GET /Chassis/{id}/Power` enumerates power-supply and voltage sensors from DBus inventory + `xyz.openbmc_project.Sensor` paths
+3. **Chassis Thermal sensors** — `GET /Chassis/{id}/Thermal` enumerates temperature and fan sensors from DBus
+4. **Chassis Sensors collection** — `GET /Chassis/{id}/Sensors` returns the full merged sensor list with `ReadingType`, `Reading`, and `Status`
+5. **BMC reset via DBus** — `POST /Managers/bmc/Actions/Manager.Reset` writes `RequestedBMCTransition` on `xyz.openbmc_project.State.BMC`
+6. **System reset via DBus** — `POST /Systems/system/Actions/ComputerSystem.Reset` maps all Redfish `ResetType` values to `xyz.openbmc_project.State.Host.Transition` enum strings
+7. **NIC enumeration from DBus** — `GET /Managers/bmc/EthernetInterfaces` dynamically lists all NICs via `GetManagedObjects` filtering on `EthernetInterface` interface
 
 ### ⚠️ Partially Implemented
 
@@ -196,14 +206,14 @@ bmcweb-ng/
 | Feature | bmcweb | bmcweb-ng | Notes |
 |---------|--------|-----------|-------|
 | Redfish ServiceRoot | ✅ | ✅ | v1.17.0 compliant |
-| Redfish Systems | ✅ | ✅ | Collection + instance + live PowerState from DBus |
+| Redfish Systems | ✅ | ✅ | Collection + instance + live PowerState; Reset via DBus |
 | Redfish Systems/Processors | ✅ | ✅ | Collection + individual instance from DBus inventory |
 | Redfish Systems/Memory | ✅ | ✅ | Collection + individual instance from DBus inventory |
 | Redfish Systems/LogServices | ✅ | ✅ | Collection + EventLog instance endpoint |
-| Redfish Chassis | ✅ | ✅ | Collection enumerated from DBus + Power/Thermal/Sensors |
-| Redfish Managers | ✅ | ✅ | Live FirmwareVersion, hostname, NTP, NIC MAC/IP from DBus |
+| Redfish Chassis | ✅ | ✅ | Collection from DBus + Power/Thermal/Sensors live data |
+| Redfish Managers | ✅ | ✅ | Live FirmwareVersion, hostname, NTP, NIC list + MAC/IP from DBus; Reset via DBus |
 | SessionService | ✅ | ✅ | Full login flow, X-Auth-Token, role fetched from DBus |
-| AccountService | ✅ | ✅ | Accounts + Roles |
+| AccountService | ✅ | ✅ | Full CRUD: list/get/create/patch/delete via DBus User.Manager |
 | EventService | ✅ | ✅ | Subscriptions + SubmitTestEvent |
 | TaskService | ✅ | ✅ | Collection + instance management |
 | UpdateService | ✅ | ✅ | FirmwareInventory + SimpleUpdate |
@@ -259,14 +269,19 @@ Measured on OpenBMC `qemuarm` (emulated Cortex-A15, 256 MB RAM). Binary:
 - [x] RBAC privilege system
 
 ### Phase 3: DBus Integration (In Progress)
-- [ ] Wire ZBusClient to Redfish resource handlers
-- [ ] Power state from xyz.openbmc_project.State.Host
+- [x] Wire ZBusClient to Redfish resource handlers
+- [x] Power state from xyz.openbmc_project.State.Host
 - [ ] Boot settings from xyz.openbmc_project.Control.Boot
-- [ ] Processor/DIMM inventory from xyz.openbmc_project.Inventory
-- [ ] Sensor data from xyz.openbmc_project.Sensor.Value
-- [ ] Firmware version from xyz.openbmc_project.Software.Version
-- [ ] Network config from xyz.openbmc_project.Network
-- [ ] User management from xyz.openbmc_project.User.Manager
+- [x] Processor/DIMM inventory from xyz.openbmc_project.Inventory
+- [x] Sensor data from xyz.openbmc_project.Sensor.Value
+- [x] Firmware version from xyz.openbmc_project.Software.Version
+- [x] Network config from xyz.openbmc_project.Network
+- [x] User management from xyz.openbmc_project.User.Manager
+- [x] BMC reset via xyz.openbmc_project.State.BMC
+- [x] Host reset via xyz.openbmc_project.State.Host (all ResetType variants)
+- [x] Chassis sensors (Power, Thermal, full Sensors collection)
+- [ ] Boot settings (xyz.openbmc_project.Control.Boot.Mode / Source)
+- [ ] Log entries (EventLog/Entries) with live DBus log data
 
 ### Phase 4: Advanced Features
 - [ ] WebSocket KVM (RFB protocol)

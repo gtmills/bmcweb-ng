@@ -9,6 +9,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **AccountService DBus wiring** (`accounts.rs`) —
+  - `GET /AccountService/Accounts` now calls `xyz.openbmc_project.User.Manager / ListUsers`
+    to enumerate all BMC users dynamically. Falls back to static `root` entry when DBus is
+    unavailable.
+  - `POST /AccountService/Accounts` calls `CreateUser(username, [priv-group, ssh], enabled)`
+    to create a real system user. Returns HTTP 500 if DBus call fails.
+  - `GET /AccountService/Accounts/{id}` calls `GetUserInfo(username)` to read `UserPrivilege`,
+    `UserEnabled`, and `UserLockedForFailedAttempt`. Falls back to static `root` data for
+    unknown users when DBus is unavailable.
+  - `PATCH /AccountService/Accounts/{id}` applies `RoleId` and `Enabled` changes via
+    `set_property` on `xyz.openbmc_project.User.Attributes`.
+  - `DELETE /AccountService/Accounts/{id}` calls `DeleteUser(username)`. Deleting `root`
+    is still forbidden (returns HTTP 403).
+  - Added `openbmc_priv_to_role()` helper mapping OpenBMC priv groups to Redfish roles.
+
+- **Chassis Power DBus wiring** (`chassis.rs`) — `GET /Chassis/chassis/Power` now queries
+  `GetManagedObjects` for objects under `/xyz/openbmc_project/sensors/voltage/` (voltage
+  sensors, `Sensor.Value` interface) and inventory objects with
+  `Inventory.Item.PowerSupply`. `Voltages` and `PowerSupplies` arrays are populated from
+  live DBus data; fall back to empty arrays when DBus is unavailable.
+
+- **Chassis Thermal DBus wiring** (`chassis.rs`) — `GET /Chassis/chassis/Thermal` now
+  queries `GetManagedObjects` on the sensor service for temperature sensors
+  (`/sensors/temperature/`) and fan sensors (`/sensors/fan*`). `Temperatures` and `Fans`
+  arrays include `ReadingCelsius`/`Reading` values, threshold properties, and `ReadingUnits`.
+  Falls back to empty arrays when DBus is unavailable.
+
+- **Chassis Sensors DBus enumeration** (`chassis.rs`) — `GET /Chassis/chassis/Sensors` now
+  enumerates all objects with `Sensor.Value` interface under `/xyz/openbmc_project/sensors/`
+  and returns a `SensorCollection` with `Members@odata.count` reflecting the live count.
+  Sensor IDs are derived from the last two path segments (e.g. `temperature_ambient`).
+
+- **BMC reset DBus wiring** (`managers.rs`) — `POST /Managers/bmc/Actions/Manager.Reset`
+  now writes `RequestedBMCTransition` on `xyz.openbmc_project.State.BMC` at
+  `/xyz/openbmc_project/state/bmc0`. `GracefulRestart` maps to `Transition.Reboot`;
+  `ForceRestart` maps to `Transition.HardReboot`. Returns 204 even if DBus is unavailable
+  (logs a warning).
+
+- **System reset DBus wiring** (`systems.rs`) — `POST /Systems/system/Actions/ComputerSystem.Reset`
+  now writes `RequestedHostTransition` or `RequestedPowerTransition` to the appropriate
+  DBus state object. Full ResetType → DBus transition mapping:
+  `On`/`ForceOn` → `Host.Transition.On`, `ForceOff` → `Chassis.Transition.Off`,
+  `GracefulShutdown` → `Host.Transition.Off`, `GracefulRestart` → `Host.Transition.Reboot`,
+  `ForceRestart` → `Host.Transition.ForceWarmReboot`, `Nmi` → `Host.Transition.DiagnosticMode`.
+
+- **BMC NIC enumeration** (`managers.rs`) — `GET /Managers/bmc/EthernetInterfaces`
+  now calls `GetManagedObjects` on `xyz.openbmc_project.Network` to enumerate all
+  interfaces implementing `xyz.openbmc_project.Network.EthernetInterface`. Falls back to
+  a single `eth0` entry when DBus is unavailable or returns an empty set.
+
+### Changed
+
+- `accounts.rs`: removed hard-coded `root`-only restriction from `get_account()`; now
+  any account present in DBus can be retrieved.
+- `chassis.rs`: Power, Thermal, and Sensors endpoints now use dynamic `@odata.id` based on
+  `chassis_id` parameter instead of hard-coded `"/redfish/v1/Chassis/chassis/..."`.
+- `managers.rs`: EthernetInterfaces collection count is now dynamic (reflects live NIC count).
+
+### Tests
+
+- 115 unit tests passing (up from 112); new tests for account operations (no-DBus fallback,
+  delete-root-forbidden, delete-unknown, `openbmc_priv_to_role` mapping).
+
+---
+
 - **DBus PowerState wiring** (`systems.rs`) — `GET /redfish/v1/Systems/system`
   now queries `xyz.openbmc_project.State.Host / CurrentHostState` at
   `/xyz/openbmc_project/state/host0`. Maps `HostState.Running`, `Quiesced`, and

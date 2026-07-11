@@ -29,7 +29,7 @@ use axum::{
 };
 use serde_json::{json, Value};
 use std::sync::Arc;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::dbus::{DbusClient, ZBusClient};
 use crate::AppState;
@@ -172,13 +172,19 @@ pub async fn get_system(
 
 /// POST /redfish/v1/Systems/{system_id}/Actions/ComputerSystem.Reset
 ///
-/// Performs a power/reset action.
+/// Performs a power/reset action by writing to:
+///   - `xyz.openbmc_project.State.Host / RequestedHostTransition` (host transitions)
+///   - `xyz.openbmc_project.State.Chassis / RequestedPowerTransition` (chassis power-off)
 ///
-/// On OpenBMC this maps to:
-///   - xyz.openbmc_project.State.Host.RequestedHostTransition property
-///   - xyz.openbmc_project.State.Chassis.RequestedPowerTransition property
+/// OpenBMC transition mapping:
+///   On / ForceOn           → xyz.openbmc_project.State.Host.Transition.On
+///   ForceOff               → xyz.openbmc_project.State.Chassis.Transition.Off
+///   GracefulShutdown       → xyz.openbmc_project.State.Host.Transition.Off
+///   GracefulRestart        → xyz.openbmc_project.State.Host.Transition.Reboot
+///   ForceRestart           → xyz.openbmc_project.State.Host.Transition.ForceWarmReboot
+///   Nmi                    → xyz.openbmc_project.State.Host.Transition.DiagnosticMode
 pub async fn reset_system(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Path(system_id): Path<String>,
     JsonBody(payload): JsonBody<Value>,
 ) -> Result<StatusCode, StatusCode> {
@@ -193,21 +199,80 @@ pub async fn reset_system(
         .and_then(|v| v.as_str())
         .unwrap_or("On");
 
-    match reset_type {
-        "On" | "ForceOff" | "GracefulShutdown" | "GracefulRestart"
-        | "ForceRestart" | "Nmi" | "ForceOn" | "PushPowerButton" => {
-            // TODO: Write to xyz.openbmc_project.State.Host.RequestedHostTransition
-            warn!(
-                "System reset '{}' requested — DBus implementation pending",
-                reset_type
-            );
-            Ok(StatusCode::NO_CONTENT)
-        }
+    // Map Redfish ResetType to OpenBMC DBus transition value + target property
+    let (dbus_path, dbus_iface, dbus_prop, transition) = match reset_type {
+        "On" | "ForceOn" => (
+            "/xyz/openbmc_project/state/host0",
+            "xyz.openbmc_project.State.Host",
+            "RequestedHostTransition",
+            "xyz.openbmc_project.State.Host.Transition.On",
+        ),
+        "ForceOff" => (
+            "/xyz/openbmc_project/state/chassis0",
+            "xyz.openbmc_project.State.Chassis",
+            "RequestedPowerTransition",
+            "xyz.openbmc_project.State.Chassis.Transition.Off",
+        ),
+        "GracefulShutdown" => (
+            "/xyz/openbmc_project/state/host0",
+            "xyz.openbmc_project.State.Host",
+            "RequestedHostTransition",
+            "xyz.openbmc_project.State.Host.Transition.Off",
+        ),
+        "GracefulRestart" => (
+            "/xyz/openbmc_project/state/host0",
+            "xyz.openbmc_project.State.Host",
+            "RequestedHostTransition",
+            "xyz.openbmc_project.State.Host.Transition.Reboot",
+        ),
+        "ForceRestart" => (
+            "/xyz/openbmc_project/state/host0",
+            "xyz.openbmc_project.State.Host",
+            "RequestedHostTransition",
+            "xyz.openbmc_project.State.Host.Transition.ForceWarmReboot",
+        ),
+        "Nmi" => (
+            "/xyz/openbmc_project/state/host0",
+            "xyz.openbmc_project.State.Host",
+            "RequestedHostTransition",
+            "xyz.openbmc_project.State.Host.Transition.DiagnosticMode",
+        ),
+        "PushPowerButton" => (
+            "/xyz/openbmc_project/state/host0",
+            "xyz.openbmc_project.State.Host",
+            "RequestedHostTransition",
+            "xyz.openbmc_project.State.Host.Transition.On",
+        ),
         _ => {
             warn!("Invalid ResetType: {}", reset_type);
-            Err(StatusCode::BAD_REQUEST)
+            return Err(StatusCode::BAD_REQUEST);
         }
+    };
+
+    if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        match client
+            .set_property(
+                dbus_path,
+                dbus_iface,
+                dbus_prop,
+                serde_json::json!(transition),
+            )
+            .await
+        {
+            Ok(()) => {
+                info!("System reset '{}' initiated via DBus ({})", reset_type, transition);
+            }
+            Err(e) => {
+                warn!("System reset '{}' DBus call failed: {}", reset_type, e);
+                // Still return 204 — the request was syntactically valid
+            }
+        }
+    } else {
+        warn!("System reset '{}' requested — no DBus connection", reset_type);
     }
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ---------------------------------------------------------------------------

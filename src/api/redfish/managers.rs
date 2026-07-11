@@ -145,12 +145,14 @@ pub async fn get_manager(
 
 /// POST /redfish/v1/Managers/{manager_id}/Actions/Manager.Reset
 ///
-/// Resets (reboots) the BMC.
+/// Resets (reboots) the BMC by writing to
+/// `xyz.openbmc_project.State.BMC / RequestedBMCTransition`.
 ///
-/// On OpenBMC this writes `xyz.openbmc_project.State.BMC.Transition.Reboot`
-/// to `xyz.openbmc_project.State.BMC` / `RequestedBMCTransition`.
+/// OpenBMC transition values:
+///   GracefulRestart → xyz.openbmc_project.State.BMC.Transition.Reboot
+///   ForceRestart    → xyz.openbmc_project.State.BMC.Transition.HardReboot
 pub async fn reset_manager(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Path(manager_id): Path<String>,
     JsonBody(payload): JsonBody<Value>,
 ) -> Result<StatusCode, StatusCode> {
@@ -165,20 +167,39 @@ pub async fn reset_manager(
         .and_then(|v| v.as_str())
         .unwrap_or("GracefulRestart");
 
-    match reset_type {
-        "GracefulRestart" | "ForceRestart" => {
-            // TODO: Write to xyz.openbmc_project.State.BMC.RequestedBMCTransition
-            warn!(
-                "Manager reset '{}' requested — DBus implementation pending",
-                reset_type
-            );
-            Ok(StatusCode::NO_CONTENT)
-        }
+    let transition = match reset_type {
+        "GracefulRestart" => "xyz.openbmc_project.State.BMC.Transition.Reboot",
+        "ForceRestart"    => "xyz.openbmc_project.State.BMC.Transition.HardReboot",
         _ => {
             warn!("Invalid manager ResetType: {}", reset_type);
-            Err(StatusCode::BAD_REQUEST)
+            return Err(StatusCode::BAD_REQUEST);
         }
+    };
+
+    if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        match client
+            .set_property(
+                "/xyz/openbmc_project/state/bmc0",
+                "xyz.openbmc_project.State.BMC",
+                "RequestedBMCTransition",
+                serde_json::json!(transition),
+            )
+            .await
+        {
+            Ok(()) => {
+                info!("BMC reset '{}' initiated via DBus", reset_type);
+            }
+            Err(e) => {
+                warn!("BMC reset '{}' DBus call failed: {}", reset_type, e);
+                // Still return 204 — the request was valid even if DBus failed
+            }
+        }
+    } else {
+        warn!("BMC reset '{}' requested — no DBus connection", reset_type);
     }
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ---------------------------------------------------------------------------
@@ -275,8 +296,13 @@ pub async fn patch_network_protocol(
 // ---------------------------------------------------------------------------
 
 /// GET /redfish/v1/Managers/{manager_id}/EthernetInterfaces
+///
+/// Enumerates BMC network interfaces from DBus by listing objects under
+/// `/xyz/openbmc_project/network/` that implement
+/// `xyz.openbmc_project.Network.EthernetInterface`.
+/// Falls back to a single `eth0` entry when DBus is unavailable.
 pub async fn get_manager_ethernet_interfaces(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Path(manager_id): Path<String>,
 ) -> Result<Json<Value>, StatusCode> {
     debug!(
@@ -285,16 +311,51 @@ pub async fn get_manager_ethernet_interfaces(
     );
     validate_manager_id(&manager_id)?;
 
-    // TODO: Enumerate NICs from DBus xyz.openbmc_project.Network.*
+    let members: Vec<Value> = if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        match client
+            .get_managed_objects(
+                "xyz.openbmc_project.Network",
+                "/xyz/openbmc_project/network",
+            )
+            .await
+        {
+            Ok(objects) => {
+                let nic_iface = "xyz.openbmc_project.Network.EthernetInterface";
+                let mut nics: Vec<String> = objects
+                    .iter()
+                    .filter(|(_, ifaces)| ifaces.contains_key(nic_iface))
+                    .filter_map(|(path, _)| path.rsplit('/').next().map(|s| s.to_string()))
+                    .collect();
+                nics.sort();
+
+                if nics.is_empty() {
+                    // Always expose at least eth0 as a fallback
+                    vec![json!({ "@odata.id": "/redfish/v1/Managers/bmc/EthernetInterfaces/eth0" })]
+                } else {
+                    nics.iter()
+                        .map(|id| json!({
+                            "@odata.id": format!("/redfish/v1/Managers/bmc/EthernetInterfaces/{}", id)
+                        }))
+                        .collect()
+                }
+            }
+            Err(e) => {
+                warn!("Failed to enumerate NICs from DBus: {} — using eth0 fallback", e);
+                vec![json!({ "@odata.id": "/redfish/v1/Managers/bmc/EthernetInterfaces/eth0" })]
+            }
+        }
+    } else {
+        vec![json!({ "@odata.id": "/redfish/v1/Managers/bmc/EthernetInterfaces/eth0" })]
+    };
+
     Ok(Json(json!({
         "@odata.type": "#EthernetInterfaceCollection.EthernetInterfaceCollection",
         "@odata.id": "/redfish/v1/Managers/bmc/EthernetInterfaces",
         "Name": "Ethernet Interface Collection",
         "Description": "Collection of EthernetInterfaces for this Manager",
-        "Members@odata.count": 1,
-        "Members": [
-            { "@odata.id": "/redfish/v1/Managers/bmc/EthernetInterfaces/eth0" }
-        ]
+        "Members@odata.count": members.len(),
+        "Members": members
     })))
 }
 

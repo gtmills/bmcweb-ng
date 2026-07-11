@@ -11,6 +11,19 @@
 //! - GET  /redfish/v1/AccountService/Roles/{role_id}
 //!
 //! Reference: DMTF DSP0266, AccountService schema v1.12.0, ManagerAccount schema v1.12.0
+//!
+//! OpenBMC DBus sources:
+//!   - User enumeration: xyz.openbmc_project.User.Manager / ListUsers
+//!   - User info:        xyz.openbmc_project.User.Manager / GetUserInfo (username) → dict
+//!   - Create user:      xyz.openbmc_project.User.Manager / CreateUser
+//!   - Delete user:      xyz.openbmc_project.User.Manager / DeleteUser
+//!
+//! OpenBMC GetUserInfo response keys (dict<string, variant>):
+//!   UserPrivilege   → string  (e.g. "priv-admin")
+//!   UserEnabled     → bool
+//!   UserLockedForFailedAttempt → bool
+//!   UserPasswordExpired → bool
+//!   RemoteUser      → bool
 
 use axum::{
     extract::{Path, State},
@@ -23,6 +36,7 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
+use crate::dbus::{DbusClient, ZBusClient};
 use crate::AppState;
 
 /// Request body for creating a new account
@@ -56,8 +70,6 @@ pub struct PatchAccountRequest {
 }
 
 /// The predefined Redfish roles supported by OpenBMC.
-///
-/// These correspond to the roles defined in the Redfish Roles privilege map.
 const SUPPORTED_ROLES: &[(&str, &[&str])] = &[
     (
         "Administrator",
@@ -91,6 +103,23 @@ fn role_to_json(id: &str, privileges: &[&str]) -> Value {
         "IsPredefined": true,
         "AssignedPrivileges": privs,
     })
+}
+
+/// Map an OpenBMC privilege group string to a Redfish RoleId.
+///
+/// OpenBMC group → Redfish role:
+///   priv-admin    → Administrator
+///   priv-operator → Operator
+///   priv-user     → ReadOnly
+///   priv-noaccess → NoAccess
+fn openbmc_priv_to_role(priv_str: &str) -> &'static str {
+    match priv_str {
+        "priv-admin"    => "Administrator",
+        "priv-operator" => "Operator",
+        "priv-user"     => "ReadOnly",
+        "priv-noaccess" => "NoAccess",
+        _               => "ReadOnly",
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -144,37 +173,72 @@ pub async fn get_account_service(
 
 /// GET /redfish/v1/AccountService/Accounts
 ///
-/// Returns the ManagerAccountCollection.  Account data is read from the
-/// system PAM/passwd database on Linux; here we return a static placeholder
-/// representing the `root` account until DBus-backed account enumeration
-/// is implemented.
+/// Enumerates user accounts via `xyz.openbmc_project.User.Manager.ListUsers`.
+/// Falls back to a single static `root` entry when DBus is unavailable.
 pub async fn get_accounts_collection(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
 ) -> Result<Json<Value>, StatusCode> {
     debug!("GET /redfish/v1/AccountService/Accounts");
 
-    // TODO: Enumerate actual accounts from DBus
-    // xyz.openbmc_project.User.Manager / ListUsers
-    let response = json!({
+    let members: Vec<Value> = if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        match client
+            .call_method(
+                "xyz.openbmc_project.User.Manager",
+                "/xyz/openbmc_project/user",
+                "xyz.openbmc_project.User.Manager",
+                "ListUsers",
+                None,
+            )
+            .await
+        {
+            Ok(val) => {
+                // ListUsers returns an array of username strings
+                if let Some(users) = val.as_array() {
+                    let mut result: Vec<Value> = users
+                        .iter()
+                        .filter_map(|u| u.as_str())
+                        .map(|username| {
+                            json!({ "@odata.id": format!("/redfish/v1/AccountService/Accounts/{}", username) })
+                        })
+                        .collect();
+                    result.sort_by_key(|v| v["@odata.id"].as_str().unwrap_or("").to_string());
+                    result
+                } else {
+                    warn!("ListUsers returned unexpected format: {:?}", val);
+                    vec![json!({ "@odata.id": "/redfish/v1/AccountService/Accounts/root" })]
+                }
+            }
+            Err(e) => {
+                warn!("ListUsers DBus call failed: {} — using static fallback", e);
+                vec![json!({ "@odata.id": "/redfish/v1/AccountService/Accounts/root" })]
+            }
+        }
+    } else {
+        vec![json!({ "@odata.id": "/redfish/v1/AccountService/Accounts/root" })]
+    };
+
+    let count = members.len();
+    Ok(Json(json!({
         "@odata.type": "#ManagerAccountCollection.ManagerAccountCollection",
         "@odata.id": "/redfish/v1/AccountService/Accounts",
         "Name": "Accounts Collection",
         "Description": "BMC User Accounts",
-        "Members@odata.count": 1,
-        "Members": [
-            { "@odata.id": "/redfish/v1/AccountService/Accounts/root" }
-        ]
-    });
-
-    Ok(Json(response))
+        "Members@odata.count": count,
+        "Members": members
+    })))
 }
 
 /// POST /redfish/v1/AccountService/Accounts
 ///
-/// Creates a new user account.  Full implementation requires DBus calls to
-/// `xyz.openbmc_project.User.Manager.CreateUser`.
+/// Creates a new user account via `xyz.openbmc_project.User.Manager.CreateUser`.
+///
+/// DBus signature: CreateUser(sas b) → void
+///   arg 0: username (string)
+///   arg 1: groups (array of strings, e.g. ["priv-admin", "ssh"])
+///   arg 2: userPassword is managed by PAM, not passed here
 pub async fn create_account(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     JsonBody(body): JsonBody<CreateAccountRequest>,
 ) -> Result<(StatusCode, Json<Value>), StatusCode> {
     debug!("POST /redfish/v1/AccountService/Accounts - user: {}", body.username);
@@ -189,9 +253,42 @@ pub async fn create_account(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    // TODO: Create account via DBus xyz.openbmc_project.User.Manager.CreateUser
-    info!("Account creation requested for '{}' with role '{}' (DBus not yet implemented)",
-          body.username, body.role_id);
+    // Map Redfish RoleId → OpenBMC privilege group
+    let openbmc_group = match body.role_id.as_str() {
+        "Administrator" => "priv-admin",
+        "Operator"      => "priv-operator",
+        "ReadOnly"      => "priv-user",
+        "NoAccess"      => "priv-noaccess",
+        _               => "priv-user",
+    };
+
+    if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        // CreateUser args: username, [groups], enabled
+        // We pass the priv group and "ssh" group so the user can log in
+        let args = json!([body.username, [openbmc_group, "ssh"], body.enabled]);
+        match client
+            .call_method(
+                "xyz.openbmc_project.User.Manager",
+                "/xyz/openbmc_project/user",
+                "xyz.openbmc_project.User.Manager",
+                "CreateUser",
+                Some(&args),
+            )
+            .await
+        {
+            Ok(_) => {
+                info!("Created user '{}' with role '{}' via DBus", body.username, body.role_id);
+            }
+            Err(e) => {
+                warn!("CreateUser DBus call failed for '{}': {}", body.username, e);
+                // Return 500 if DBus call fails — the account was not created
+                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+            }
+        }
+    } else {
+        info!("No DBus — account creation for '{}' acknowledged but not persisted", body.username);
+    }
 
     let response = json!({
         "@odata.type": "#ManagerAccount.v1_12_0.ManagerAccount",
@@ -214,53 +311,90 @@ pub async fn create_account(
 }
 
 /// GET /redfish/v1/AccountService/Accounts/{account_id}
+///
+/// Retrieves account info from `xyz.openbmc_project.User.Manager.GetUserInfo`.
+/// Falls back to static data for `root` when DBus is unavailable.
 pub async fn get_account(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Path(account_id): Path<String>,
 ) -> Result<Json<Value>, StatusCode> {
     debug!("GET /redfish/v1/AccountService/Accounts/{}", account_id);
 
-    // TODO: Retrieve account from DBus
-    // Only "root" placeholder is supported until DBus integration is complete.
-    if account_id != "root" {
-        warn!("Account '{}' not found", account_id);
-        return Err(StatusCode::NOT_FOUND);
-    }
+    let (role_id, enabled, locked) = if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        match client
+            .call_method(
+                "xyz.openbmc_project.User.Manager",
+                "/xyz/openbmc_project/user",
+                "xyz.openbmc_project.User.Manager",
+                "GetUserInfo",
+                Some(&json!(account_id)),
+            )
+            .await
+        {
+            Ok(info) => {
+                // GetUserInfo returns a dict<string, variant>
+                let priv_str = info
+                    .get("UserPrivilege")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("priv-user");
+                let role = openbmc_priv_to_role(priv_str).to_string();
+                let is_enabled = info
+                    .get("UserEnabled")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+                let is_locked = info
+                    .get("UserLockedForFailedAttempt")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                (role, is_enabled, is_locked)
+            }
+            Err(e) => {
+                warn!("GetUserInfo for '{}' failed: {}", account_id, e);
+                // If the DBus call failed with a "user not found" style error,
+                // return 404; otherwise fall back to static data for root.
+                if account_id != "root" {
+                    return Err(StatusCode::NOT_FOUND);
+                }
+                ("Administrator".to_string(), true, false)
+            }
+        }
+    } else {
+        // No DBus: only root is known
+        if account_id != "root" {
+            warn!("Account '{}' not found (no DBus)", account_id);
+            return Err(StatusCode::NOT_FOUND);
+        }
+        ("Administrator".to_string(), true, false)
+    };
 
-    let response = json!({
+    Ok(Json(json!({
         "@odata.type": "#ManagerAccount.v1_12_0.ManagerAccount",
-        "@odata.id": "/redfish/v1/AccountService/Accounts/root",
-        "Id": "root",
-        "Name": "User Account: root",
-        "UserName": "root",
-        "RoleId": "Administrator",
-        "Enabled": true,
-        "Locked": false,
+        "@odata.id": format!("/redfish/v1/AccountService/Accounts/{}", account_id),
+        "Id": account_id,
+        "Name": format!("User Account: {}", account_id),
+        "UserName": account_id,
+        "RoleId": role_id,
+        "Enabled": enabled,
+        "Locked": locked,
         "PasswordExpirationDays": null,
         "Links": {
             "Role": {
-                "@odata.id": "/redfish/v1/AccountService/Roles/Administrator"
+                "@odata.id": format!("/redfish/v1/AccountService/Roles/{}", role_id)
             }
         }
-    });
-
-    Ok(Json(response))
+    })))
 }
 
 /// PATCH /redfish/v1/AccountService/Accounts/{account_id}
 ///
-/// Updates account properties.  Full implementation requires DBus calls.
+/// Updates account properties via DBus.
 pub async fn patch_account(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Path(account_id): Path<String>,
     JsonBody(body): JsonBody<PatchAccountRequest>,
 ) -> Result<Json<Value>, StatusCode> {
     debug!("PATCH /redfish/v1/AccountService/Accounts/{}", account_id);
-
-    if account_id != "root" {
-        warn!("Account '{}' not found for PATCH", account_id);
-        return Err(StatusCode::NOT_FOUND);
-    }
 
     if let Some(ref role) = body.role_id {
         if !is_valid_role(role) {
@@ -269,18 +403,62 @@ pub async fn patch_account(
         }
     }
 
-    // TODO: Apply changes via DBus xyz.openbmc_project.User.Manager
-    info!("Account patch requested for '{}' (DBus not yet implemented)", account_id);
+    if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
 
-    // Return the (potentially updated) account — still static until DBus
-    get_account(State(_state), Path(account_id)).await
+        // Apply RoleId change by updating the UserPrivilege attribute
+        if let Some(ref new_role) = body.role_id {
+            let openbmc_group = match new_role.as_str() {
+                "Administrator" => "priv-admin",
+                "Operator"      => "priv-operator",
+                "ReadOnly"      => "priv-user",
+                "NoAccess"      => "priv-noaccess",
+                _               => "priv-user",
+            };
+            let user_obj = format!("/xyz/openbmc_project/user/{}", account_id);
+            if let Err(e) = client
+                .set_property(
+                    &user_obj,
+                    "xyz.openbmc_project.User.Attributes",
+                    "UserPrivilege",
+                    json!(openbmc_group),
+                )
+                .await
+            {
+                warn!("SetProperty UserPrivilege for '{}' failed: {}", account_id, e);
+            } else {
+                info!("Updated role for '{}' to '{}' via DBus", account_id, new_role);
+            }
+        }
+
+        // Apply Enabled change
+        if let Some(enabled) = body.enabled {
+            let user_obj = format!("/xyz/openbmc_project/user/{}", account_id);
+            if let Err(e) = client
+                .set_property(
+                    &user_obj,
+                    "xyz.openbmc_project.User.Attributes",
+                    "UserEnabled",
+                    json!(enabled),
+                )
+                .await
+            {
+                warn!("SetProperty UserEnabled for '{}' failed: {}", account_id, e);
+            }
+        }
+    } else {
+        info!("Account patch for '{}' acknowledged (no DBus)", account_id);
+    }
+
+    // Return the updated account state
+    get_account(State(state), Path(account_id)).await
 }
 
 /// DELETE /redfish/v1/AccountService/Accounts/{account_id}
 ///
-/// Deletes a user account via DBus.
+/// Deletes a user account via `xyz.openbmc_project.User.Manager.DeleteUser`.
 pub async fn delete_account(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Path(account_id): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
     debug!("DELETE /redfish/v1/AccountService/Accounts/{}", account_id);
@@ -290,9 +468,31 @@ pub async fn delete_account(
         return Err(StatusCode::FORBIDDEN);
     }
 
-    // TODO: Delete via DBus xyz.openbmc_project.User.Manager.DeleteUser
-    warn!("Account '{}' not found (DBus not yet implemented)", account_id);
-    Err(StatusCode::NOT_FOUND)
+    if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        match client
+            .call_method(
+                "xyz.openbmc_project.User.Manager",
+                "/xyz/openbmc_project/user",
+                "xyz.openbmc_project.User.Manager",
+                "DeleteUser",
+                Some(&json!(account_id)),
+            )
+            .await
+        {
+            Ok(_) => {
+                info!("Deleted user '{}' via DBus", account_id);
+                Ok(StatusCode::NO_CONTENT)
+            }
+            Err(e) => {
+                warn!("DeleteUser DBus call failed for '{}': {}", account_id, e);
+                Err(StatusCode::NOT_FOUND)
+            }
+        }
+    } else {
+        warn!("Cannot delete user '{}' — no DBus connection", account_id);
+        Err(StatusCode::NOT_FOUND)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -313,15 +513,13 @@ pub async fn get_roles_collection(
         .collect();
     let count = members.len();
 
-    let response = json!({
+    Ok(Json(json!({
         "@odata.type": "#RoleCollection.RoleCollection",
         "@odata.id": "/redfish/v1/AccountService/Roles",
         "Name": "Roles Collection",
         "Members@odata.count": count,
         "Members": members,
-    });
-
-    Ok(Json(response))
+    })))
 }
 
 /// GET /redfish/v1/AccountService/Roles/{role_id}
@@ -358,7 +556,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_accounts_collection() {
+    async fn test_get_accounts_collection_no_dbus() {
+        // No DBus — falls back to single root entry
         let config = Config::default();
         let state = Arc::new(AppState::new(config));
         let result = get_accounts_collection(State(state)).await;
@@ -369,7 +568,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_account_root() {
+    async fn test_get_account_root_no_dbus() {
         let config = Config::default();
         let state = Arc::new(AppState::new(config));
         let result = get_account(State(state), Path("root".to_string())).await;
@@ -380,11 +579,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_account_not_found() {
+    async fn test_get_account_not_found_no_dbus() {
         let config = Config::default();
         let state = Arc::new(AppState::new(config));
         let result = get_account(State(state), Path("nobody".to_string())).await;
         assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_delete_account_root_forbidden() {
+        let config = Config::default();
+        let state = Arc::new(AppState::new(config));
+        let result = delete_account(State(state), Path("root".to_string())).await;
+        assert_eq!(result.unwrap_err(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_delete_account_no_dbus() {
+        let config = Config::default();
+        let state = Arc::new(AppState::new(config));
+        let result = delete_account(State(state), Path("testuser".to_string())).await;
+        // No DBus → 404
         assert_eq!(result.unwrap_err(), StatusCode::NOT_FOUND);
     }
 
@@ -427,5 +643,14 @@ mod tests {
         assert!(is_valid_role("NoAccess"));
         assert!(!is_valid_role("SuperAdmin"));
         assert!(!is_valid_role(""));
+    }
+
+    #[test]
+    fn test_openbmc_priv_to_role() {
+        assert_eq!(openbmc_priv_to_role("priv-admin"), "Administrator");
+        assert_eq!(openbmc_priv_to_role("priv-operator"), "Operator");
+        assert_eq!(openbmc_priv_to_role("priv-user"), "ReadOnly");
+        assert_eq!(openbmc_priv_to_role("priv-noaccess"), "NoAccess");
+        assert_eq!(openbmc_priv_to_role("unknown"), "ReadOnly");
     }
 }
