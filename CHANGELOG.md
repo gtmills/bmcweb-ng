@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Boot override settings** (`systems.rs`) — `GET /Systems/system` now reads
+  `BootSource` from `xyz.openbmc_project.Control.Boot.Source` at
+  `/xyz/openbmc_project/control/host0/boot` and the one-time-boot path.
+  `BootSourceOverrideEnabled`, `BootSourceOverrideTarget`, and `BootSourceOverrideMode`
+  are populated from live DBus values instead of static defaults.
+
+- **PATCH /Systems/system** (`systems.rs`) — New handler allows setting
+  `Boot.BootSourceOverrideTarget` and `Boot.BootSourceOverrideEnabled` via DBus
+  `set_property` on the persistent boot path and one-time-boot path.
+
+- **EventLog Entries collection** (`systems.rs`) —
+  `GET /Systems/system/LogServices/EventLog/Entries` reads all log entries from
+  `xyz.openbmc_project.Logging` via `GetManagedObjects`, returning them newest-first
+  with `Severity`, `Created`, and `Message` fields.
+
+- **EventLog Entry instance** (`systems.rs`) —
+  `GET /Systems/system/LogServices/EventLog/Entries/{entry_id}` reads a single log
+  entry from `/xyz/openbmc_project/logging/entry/{N}` via `get_all_properties`.
+
+- **ClearLog action** (`systems.rs`) —
+  `POST /Systems/system/LogServices/EventLog/Actions/LogService.ClearLog` calls
+  `xyz.openbmc_project.Collection.DeleteAll / DeleteAll` to flush all log entries.
+
+- **PATCH NetworkProtocol fully wired** (`managers.rs`) —
+  `PATCH /Managers/bmc/NetworkProtocol` now applies `HostName` and `NTP.NTPServers`
+  changes via `set_property` on `xyz.openbmc_project.Network.SystemConfiguration`.
+  Returns the updated resource after applying changes.
+
 - **AccountService DBus wiring** (`accounts.rs`) —
   - `GET /AccountService/Accounts` now calls `xyz.openbmc_project.User.Manager / ListUsers`
     to enumerate all BMC users dynamically. Falls back to static `root` entry when DBus is

@@ -276,19 +276,62 @@ pub async fn get_network_protocol(
 
 /// PATCH /redfish/v1/Managers/{manager_id}/NetworkProtocol
 ///
-/// Updates network service configuration.
+/// Updates HostName and/or NTP server list via DBus.
+///
+/// OpenBMC DBus target:
+///   /xyz/openbmc_project/network/config
+///   interface: xyz.openbmc_project.Network.SystemConfiguration
+///   properties: HostName (string), NTPServers (array of strings)
 pub async fn patch_network_protocol(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Path(manager_id): Path<String>,
-    JsonBody(_body): JsonBody<Value>,
+    JsonBody(body): JsonBody<Value>,
 ) -> Result<Json<Value>, StatusCode> {
     debug!("PATCH /redfish/v1/Managers/{}/NetworkProtocol", manager_id);
     validate_manager_id(&manager_id)?;
 
-    // TODO: Apply changes via DBus xyz.openbmc_project.Network.SystemConfiguration
-    info!("NetworkProtocol PATCH requested (DBus implementation pending)");
+    if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
 
-    get_network_protocol(State(_state), Path(manager_id)).await
+        // Apply HostName if provided
+        if let Some(hostname) = body.get("HostName").and_then(|v| v.as_str()) {
+            match client
+                .set_property(
+                    "/xyz/openbmc_project/network/config",
+                    "xyz.openbmc_project.Network.SystemConfiguration",
+                    "HostName",
+                    serde_json::json!(hostname),
+                )
+                .await
+            {
+                Ok(()) => info!("Hostname set to '{}' via DBus", hostname),
+                Err(e) => warn!("Failed to set hostname via DBus: {}", e),
+            }
+        }
+
+        // Apply NTP server list if provided via NTP.NTPServers
+        if let Some(ntp) = body.get("NTP") {
+            if let Some(servers) = ntp.get("NTPServers").and_then(|v| v.as_array()) {
+                let server_list: Vec<serde_json::Value> = servers.clone();
+                match client
+                    .set_property(
+                        "/xyz/openbmc_project/network/config",
+                        "xyz.openbmc_project.Network.SystemConfiguration",
+                        "NTPServers",
+                        serde_json::json!(server_list),
+                    )
+                    .await
+                {
+                    Ok(()) => info!("NTP servers updated via DBus ({} servers)", server_list.len()),
+                    Err(e) => warn!("Failed to set NTP servers via DBus: {}", e),
+                }
+            }
+        }
+    } else {
+        info!("NetworkProtocol PATCH: no DBus connection");
+    }
+
+    get_network_protocol(State(state), Path(manager_id)).await
 }
 
 // ---------------------------------------------------------------------------

@@ -1,23 +1,29 @@
 //! Redfish ComputerSystem and ComputerSystemCollection endpoints
 //!
 //! Implements:
-//! - GET  /redfish/v1/Systems
-//! - GET  /redfish/v1/Systems/{system_id}
-//! - POST /redfish/v1/Systems/{system_id}/Actions/ComputerSystem.Reset
-//! - GET  /redfish/v1/Systems/{system_id}/Processors
-//! - GET  /redfish/v1/Systems/{system_id}/Processors/{processor_id}
-//! - GET  /redfish/v1/Systems/{system_id}/Memory
-//! - GET  /redfish/v1/Systems/{system_id}/Memory/{memory_id}
-//! - GET  /redfish/v1/Systems/{system_id}/LogServices
-//! - GET  /redfish/v1/Systems/{system_id}/LogServices/EventLog
-//! - GET  /redfish/v1/Systems/{system_id}/Storage
-//! - GET  /redfish/v1/Systems/{system_id}/EthernetInterfaces
+//! - GET   /redfish/v1/Systems
+//! - GET   /redfish/v1/Systems/{system_id}
+//! - PATCH /redfish/v1/Systems/{system_id}
+//! - POST  /redfish/v1/Systems/{system_id}/Actions/ComputerSystem.Reset
+//! - GET   /redfish/v1/Systems/{system_id}/Processors
+//! - GET   /redfish/v1/Systems/{system_id}/Processors/{processor_id}
+//! - GET   /redfish/v1/Systems/{system_id}/Memory
+//! - GET   /redfish/v1/Systems/{system_id}/Memory/{memory_id}
+//! - GET   /redfish/v1/Systems/{system_id}/LogServices
+//! - GET   /redfish/v1/Systems/{system_id}/LogServices/EventLog
+//! - GET   /redfish/v1/Systems/{system_id}/LogServices/EventLog/Entries
+//! - GET   /redfish/v1/Systems/{system_id}/LogServices/EventLog/Entries/{entry_id}
+//! - POST  /redfish/v1/Systems/{system_id}/LogServices/EventLog/Actions/LogService.ClearLog
+//! - GET   /redfish/v1/Systems/{system_id}/Storage
+//! - GET   /redfish/v1/Systems/{system_id}/EthernetInterfaces
 //!
 //! Reference: DMTF Redfish ComputerSystem schema v1.20.0
 //!
 //! OpenBMC DBus sources:
 //!   - Power state:   xyz.openbmc_project.State.Host / CurrentHostState
-//!   - Boot settings: xyz.openbmc_project.Control.Boot.*
+//!   - Boot settings: xyz.openbmc_project.Control.Boot.Mode / BootMode
+//!                    xyz.openbmc_project.Control.Boot.Source / BootSource
+//!   - Log entries:   xyz.openbmc_project.Logging / GetAll on /xyz/openbmc_project/logging/entry/<N>
 //!   - Processor inventory: xyz.openbmc_project.Inventory.Item.Cpu
 //!   - Memory inventory:    xyz.openbmc_project.Inventory.Item.Dimm
 
@@ -83,6 +89,85 @@ fn host_state_to_power_state(raw: &str) -> &'static str {
     }
 }
 
+/// Helper: read boot override settings from DBus.
+///
+/// OpenBMC stores boot settings in two objects:
+///   /xyz/openbmc_project/control/host0/boot
+///     - xyz.openbmc_project.Control.Boot.Source :: BootSource (enum string)
+///     - xyz.openbmc_project.Control.Boot.Mode   :: BootMode   (enum string)
+///   /xyz/openbmc_project/control/host0/boot/one_time
+///     - same interfaces — used when BootSourceOverrideEnabled = "Once"
+///
+/// OpenBMC → Redfish mapping:
+///   BootSource:
+///     .Default  → "None"
+///     .Network  → "Pxe"
+///     .Disk     → "Hdd"
+///     .ExternalMedia → "Cd"
+///     .UEFI     → "UefiShell"
+///   BootMode:
+///     .Regular  → "Legacy"
+///     .Safe     → "Legacy"
+///     .Setup    → "UEFI"  (BIOS setup)
+///
+/// BootSourceOverrideEnabled:
+///   determined by whether the one_time path differs from the persistent path.
+async fn read_boot_settings(conn: &zbus::Connection) -> (String, String, String) {
+    let client = ZBusClient::from_connection(conn.clone());
+
+    // Read the persistent boot source
+    let source_raw = client
+        .get_property(
+            "/xyz/openbmc_project/control/host0/boot",
+            "xyz.openbmc_project.Control.Boot.Source",
+            "BootSource",
+        )
+        .await
+        .ok()
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .unwrap_or_default();
+
+    // Read whether the one-time override is active
+    let one_time_raw = client
+        .get_property(
+            "/xyz/openbmc_project/control/host0/boot/one_time",
+            "xyz.openbmc_project.Control.Boot.Source",
+            "BootSource",
+        )
+        .await
+        .ok()
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .unwrap_or_default();
+
+    let target = boot_source_to_redfish(&source_raw);
+    let enabled = if one_time_raw.ends_with(".Default") || one_time_raw == source_raw {
+        "Disabled"
+    } else {
+        "Once"
+    };
+    let mode = "UEFI".to_string(); // OpenBMC QEMU doesn't expose a separate mode object
+
+    (target.to_string(), enabled.to_string(), mode)
+}
+
+fn boot_source_to_redfish(raw: &str) -> &'static str {
+    if raw.ends_with(".Network") { "Pxe" }
+    else if raw.ends_with(".Disk") { "Hdd" }
+    else if raw.ends_with(".ExternalMedia") { "Cd" }
+    else if raw.ends_with(".UEFI") { "UefiShell" }
+    else { "None" }
+}
+
+fn redfish_target_to_boot_source(target: &str) -> &'static str {
+    match target {
+        "Pxe"       => "xyz.openbmc_project.Control.Boot.Source.Sources.Network",
+        "Hdd"       => "xyz.openbmc_project.Control.Boot.Source.Sources.Disk",
+        "Cd"        => "xyz.openbmc_project.Control.Boot.Source.Sources.ExternalMedia",
+        "UefiShell" => "xyz.openbmc_project.Control.Boot.Source.Sources.UEFI",
+        _           => "xyz.openbmc_project.Control.Boot.Source.Sources.Default",
+    }
+}
+
 /// GET /redfish/v1/Systems/{system_id}
 pub async fn get_system(
     State(state): State<Arc<AppState>>,
@@ -115,6 +200,13 @@ pub async fn get_system(
         "Unknown".to_string()
     };
 
+    // Query boot override settings from DBus
+    let (boot_target, boot_enabled, boot_mode) = if let Some(conn) = state.dbus_connection.as_deref() {
+        read_boot_settings(conn).await
+    } else {
+        ("None".to_string(), "Disabled".to_string(), "UEFI".to_string())
+    };
+
     Ok(Json(json!({
         "@odata.type": "#ComputerSystem.v1_20_0.ComputerSystem",
         "@odata.id": "/redfish/v1/Systems/system",
@@ -140,9 +232,9 @@ pub async fn get_system(
             "Status": { "State": "Enabled", "Health": "OK" }
         },
         "Boot": {
-            "BootSourceOverrideEnabled": "Disabled",
-            "BootSourceOverrideMode": "UEFI",
-            "BootSourceOverrideTarget": "None",
+            "BootSourceOverrideEnabled": boot_enabled,
+            "BootSourceOverrideMode": boot_mode,
+            "BootSourceOverrideTarget": boot_target,
             "BootSourceOverrideTarget@Redfish.AllowableValues": [
                 "None", "Pxe", "Hdd", "Cd", "BiosSetup", "UefiShell", "UefiTarget"
             ]
@@ -168,6 +260,80 @@ pub async fn get_system(
         "NetworkInterfaces": { "@odata.id": "/redfish/v1/Systems/system/NetworkInterfaces" },
         "LogServices": { "@odata.id": "/redfish/v1/Systems/system/LogServices" }
     })))
+}
+
+/// PATCH /redfish/v1/Systems/{system_id}
+///
+/// Updates boot override settings by writing to:
+///   /xyz/openbmc_project/control/host0/boot
+///     BootSource (xyz.openbmc_project.Control.Boot.Source)
+///   /xyz/openbmc_project/control/host0/boot/one_time
+///     BootSource (when BootSourceOverrideEnabled = "Once")
+pub async fn patch_system(
+    State(state): State<Arc<AppState>>,
+    Path(system_id): Path<String>,
+    JsonBody(body): JsonBody<Value>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!("PATCH /redfish/v1/Systems/{}", system_id);
+    validate_system_id(&system_id)?;
+
+    if let Some(boot) = body.get("Boot") {
+        if let Some(conn) = state.dbus_connection.as_deref() {
+            let client = ZBusClient::from_connection(conn.clone());
+
+            // Apply BootSourceOverrideTarget if provided
+            if let Some(target) = boot.get("BootSourceOverrideTarget").and_then(|v| v.as_str()) {
+                let dbus_val = redfish_target_to_boot_source(target);
+                if let Err(e) = client
+                    .set_property(
+                        "/xyz/openbmc_project/control/host0/boot",
+                        "xyz.openbmc_project.Control.Boot.Source",
+                        "BootSource",
+                        serde_json::json!(dbus_val),
+                    )
+                    .await
+                {
+                    warn!("Failed to set BootSource via DBus: {}", e);
+                } else {
+                    info!("Boot target set to '{}' ({})", target, dbus_val);
+                }
+            }
+
+            // Apply BootSourceOverrideEnabled: "Once" → write to one_time path
+            if let Some(enabled) = boot.get("BootSourceOverrideEnabled").and_then(|v| v.as_str()) {
+                let one_time_val = if enabled == "Once" {
+                    // Mirror the persistent source into the one-time path
+                    let src = client
+                        .get_property(
+                            "/xyz/openbmc_project/control/host0/boot",
+                            "xyz.openbmc_project.Control.Boot.Source",
+                            "BootSource",
+                        )
+                        .await
+                        .ok()
+                        .and_then(|v| v.as_str().map(|s| s.to_string()))
+                        .unwrap_or_else(|| "xyz.openbmc_project.Control.Boot.Source.Sources.Default".to_string());
+                    src
+                } else {
+                    "xyz.openbmc_project.Control.Boot.Source.Sources.Default".to_string()
+                };
+                if let Err(e) = client
+                    .set_property(
+                        "/xyz/openbmc_project/control/host0/boot/one_time",
+                        "xyz.openbmc_project.Control.Boot.Source",
+                        "BootSource",
+                        serde_json::json!(one_time_val),
+                    )
+                    .await
+                {
+                    warn!("Failed to set one_time BootSource via DBus: {}", e);
+                }
+            }
+        }
+    }
+
+    // Return updated system resource
+    get_system(State(state), Path(system_id)).await
 }
 
 /// POST /redfish/v1/Systems/{system_id}/Actions/ComputerSystem.Reset
@@ -591,6 +757,227 @@ pub async fn get_system_event_log(
         },
         "Status": { "State": "Enabled", "Health": "OK" }
     })))
+}
+
+/// GET /redfish/v1/Systems/{system_id}/LogServices/EventLog/Entries
+///
+/// Returns the collection of log entries from `xyz.openbmc_project.Logging`.
+///
+/// On OpenBMC, log entries live at:
+///   /xyz/openbmc_project/logging/entry/<N>
+///   interface: xyz.openbmc_project.Logging.Entry
+///   key properties: Id (u32), Message, Severity, Timestamp (u64 ms epoch)
+///   Resolution, AdditionalData (array of "KEY=value" strings)
+pub async fn get_event_log_entries(
+    State(state): State<Arc<AppState>>,
+    Path(system_id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!(
+        "GET /redfish/v1/Systems/{}/LogServices/EventLog/Entries",
+        system_id
+    );
+    validate_system_id(&system_id)?;
+
+    let members: Vec<Value> = if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        match client
+            .get_managed_objects(
+                "xyz.openbmc_project.Logging",
+                "/xyz/openbmc_project/logging",
+            )
+            .await
+        {
+            Ok(objects) => {
+                let entry_iface = "xyz.openbmc_project.Logging.Entry";
+                let mut entries: Vec<(u64, Value)> = objects
+                    .iter()
+                    .filter(|(path, ifaces)| {
+                        ifaces.contains_key(entry_iface)
+                            && path.contains("/logging/entry/")
+                    })
+                    .filter_map(|(path, ifaces)| {
+                        let props = &ifaces[entry_iface];
+                        let id_num = path
+                            .rsplit('/')
+                            .next()
+                            .and_then(|s| s.parse::<u64>().ok())
+                            .unwrap_or(0);
+                        let msg = props
+                            .get("Message")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("Unknown")
+                            .to_string();
+                        let severity_raw = props
+                            .get("Severity")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let severity = obmc_severity_to_redfish(severity_raw);
+                        let ts_ms = props
+                            .get("Timestamp")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+                        let created = ms_epoch_to_rfc3339(ts_ms);
+                        let entry_id = id_num.to_string();
+                        let entry = json!({
+                            "@odata.type": "#LogEntry.v1_15_0.LogEntry",
+                            "@odata.id": format!(
+                                "/redfish/v1/Systems/system/LogServices/EventLog/Entries/{}",
+                                entry_id
+                            ),
+                            "Id": entry_id,
+                            "Name": format!("Log Entry {}", entry_id),
+                            "EntryType": "Event",
+                            "Severity": severity,
+                            "Created": created,
+                            "Message": msg
+                        });
+                        Some((id_num, entry))
+                    })
+                    .collect();
+                // Sort newest-first (descending by id)
+                entries.sort_by(|a, b| b.0.cmp(&a.0));
+                entries.into_iter().map(|(_, v)| v).collect()
+            }
+            Err(e) => {
+                warn!("Failed to read log entries from DBus: {}", e);
+                vec![]
+            }
+        }
+    } else {
+        vec![]
+    };
+
+    Ok(Json(json!({
+        "@odata.type": "#LogEntryCollection.LogEntryCollection",
+        "@odata.id": "/redfish/v1/Systems/system/LogServices/EventLog/Entries",
+        "Name": "System Event Log Entries",
+        "Description": "Collection of system log entries",
+        "Members@odata.count": members.len(),
+        "Members": members
+    })))
+}
+
+/// GET /redfish/v1/Systems/{system_id}/LogServices/EventLog/Entries/{entry_id}
+pub async fn get_event_log_entry(
+    State(state): State<Arc<AppState>>,
+    Path((system_id, entry_id)): Path<(String, String)>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!(
+        "GET /redfish/v1/Systems/{}/LogServices/EventLog/Entries/{}",
+        system_id, entry_id
+    );
+    validate_system_id(&system_id)?;
+
+    if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        let dbus_path = format!("/xyz/openbmc_project/logging/entry/{}", entry_id);
+        let entry_iface = "xyz.openbmc_project.Logging.Entry";
+
+        match client
+            .get_all_properties(&dbus_path, entry_iface)
+            .await
+        {
+            Ok(props) => {
+                let msg = props
+                    .get("Message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Unknown")
+                    .to_string();
+                let severity_raw = props
+                    .get("Severity")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let severity = obmc_severity_to_redfish(severity_raw);
+                let ts_ms = props
+                    .get("Timestamp")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let created = ms_epoch_to_rfc3339(ts_ms);
+                let resolution = props
+                    .get("Resolution")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                Ok(Json(json!({
+                    "@odata.type": "#LogEntry.v1_15_0.LogEntry",
+                    "@odata.id": format!(
+                        "/redfish/v1/Systems/system/LogServices/EventLog/Entries/{}",
+                        entry_id
+                    ),
+                    "Id": entry_id,
+                    "Name": format!("Log Entry {}", entry_id),
+                    "EntryType": "Event",
+                    "Severity": severity,
+                    "Created": created,
+                    "Message": msg,
+                    "Resolution": resolution
+                })))
+            }
+            Err(_) => Err(StatusCode::NOT_FOUND),
+        }
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    }
+}
+
+/// POST /redfish/v1/Systems/{system_id}/LogServices/EventLog/Actions/LogService.ClearLog
+///
+/// Clears all log entries by calling `DeleteAll` on the OpenBMC logging service.
+pub async fn clear_event_log(
+    State(state): State<Arc<AppState>>,
+    Path(system_id): Path<String>,
+) -> Result<StatusCode, StatusCode> {
+    debug!(
+        "POST /redfish/v1/Systems/{}/LogServices/EventLog/Actions/LogService.ClearLog",
+        system_id
+    );
+    validate_system_id(&system_id)?;
+
+    if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        match client
+            .call_method(
+                "xyz.openbmc_project.Logging",
+                "/xyz/openbmc_project/logging",
+                "xyz.openbmc_project.Collection.DeleteAll",
+                "DeleteAll",
+                None,
+            )
+            .await
+        {
+            Ok(_) => info!("Event log cleared via DBus"),
+            Err(e) => warn!("Failed to clear event log via DBus: {}", e),
+        }
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ---------------------------------------------------------------------------
+// Logging helpers
+// ---------------------------------------------------------------------------
+
+/// Convert OpenBMC severity enum to Redfish Severity string
+fn obmc_severity_to_redfish(raw: &str) -> &'static str {
+    if raw.ends_with(".Error") || raw.ends_with(".Critical") {
+        "Critical"
+    } else if raw.ends_with(".Warning") {
+        "Warning"
+    } else if raw.ends_with(".Notice") || raw.ends_with(".Informational") || raw.ends_with(".Debug") {
+        "OK"
+    } else {
+        "OK"
+    }
+}
+
+/// Convert milliseconds-since-epoch to RFC 3339 string
+fn ms_epoch_to_rfc3339(ms: u64) -> String {
+    use chrono::{TimeZone, Utc};
+    let secs = (ms / 1000) as i64;
+    let nanos = ((ms % 1000) * 1_000_000) as u32;
+    Utc.timestamp_opt(secs, nanos)
+        .single()
+        .map(|dt| dt.to_rfc3339())
+        .unwrap_or_else(|| "1970-01-01T00:00:00Z".to_string())
 }
 
 /// GET /redfish/v1/Systems/{system_id}/Storage

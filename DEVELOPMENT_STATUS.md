@@ -3,7 +3,7 @@
 ## Overview
 This document tracks the development progress of bmcweb-ng, a Rust rewrite of the OpenBMC bmcweb server.
 
-**Last Updated:** 2026-07-13
+**Last Updated:** 2026-07-13 (iteration 3)
 
 ## Project Structure
 
@@ -144,6 +144,15 @@ bmcweb-ng/
 9. **DBus chassis enumeration** — `GET /Chassis` and `GET /Chassis/{id}` enumerate from inventory
 10. **Processor + Memory instances** — `GET /Systems/system/Processors/{id}` and `/Memory/{id}` with DBus data
 
+### ✅ Completed in iteration 3 (DBus wiring — round 3)
+
+1. **Boot override settings from DBus** — `GET /Systems/system` now returns live `BootSourceOverrideTarget/Enabled/Mode` from `xyz.openbmc_project.Control.Boot.Source` at `/control/host0/boot` and `/control/host0/boot/one_time`
+2. **PATCH /Systems/system** — Sets `BootSource` and one-time boot via `set_property`; returns updated resource
+3. **EventLog Entries collection** — `GET /EventLog/Entries` reads all entries from `xyz.openbmc_project.Logging` via `GetManagedObjects`, sorted newest-first
+4. **EventLog Entry instance** — `GET /EventLog/Entries/{id}` reads a single entry via `get_all_properties`
+5. **ClearLog action** — `POST /EventLog/Actions/LogService.ClearLog` calls `DeleteAll` on logging service
+6. **PATCH NetworkProtocol fully wired** — `HostName` and `NTP.NTPServers` applied via `set_property` on `Network.SystemConfiguration`
+
 ### ✅ Completed in iteration 2 (DBus wiring — round 2)
 
 1. **AccountService full DBus wiring** — `GET /AccountService/Accounts` lists real users via `ListUsers`; `GET /Accounts/{id}` fetches live user info via `GetUserInfo`; `POST /Accounts` calls `CreateUser`; `PATCH /Accounts/{id}` writes `UserPrivilege`/`UserEnabled` via `set_property`; `DELETE /Accounts/{id}` calls `DeleteUser`
@@ -280,8 +289,9 @@ Measured on OpenBMC `qemuarm` (emulated Cortex-A15, 256 MB RAM). Binary:
 - [x] BMC reset via xyz.openbmc_project.State.BMC
 - [x] Host reset via xyz.openbmc_project.State.Host (all ResetType variants)
 - [x] Chassis sensors (Power, Thermal, full Sensors collection)
-- [ ] Boot settings (xyz.openbmc_project.Control.Boot.Mode / Source)
-- [ ] Log entries (EventLog/Entries) with live DBus log data
+- [x] Boot settings (xyz.openbmc_project.Control.Boot.Source — GET + PATCH)
+- [x] Log entries (EventLog/Entries + instance + ClearLog via DBus)
+- [x] PATCH NetworkProtocol (HostName + NTPServers via set_property)
 
 ### Phase 4: Advanced Features
 - [ ] WebSocket KVM (RFB protocol)

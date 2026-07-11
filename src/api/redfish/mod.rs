@@ -23,7 +23,9 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/", get(service_root::get_service_root))
         // Systems routes
         .route("/Systems", get(systems::get_systems_collection))
-        .route("/Systems/:system_id", get(systems::get_system))
+        .route("/Systems/:system_id",
+               get(systems::get_system)
+               .patch(systems::patch_system))
         .route("/Systems/:system_id/Actions/ComputerSystem.Reset",
                post(systems::reset_system))
         .route("/Systems/:system_id/Processors",
@@ -42,6 +44,12 @@ pub fn router() -> Router<Arc<AppState>> {
                get(systems::get_system_log_services))
         .route("/Systems/:system_id/LogServices/EventLog",
                get(systems::get_system_event_log))
+        .route("/Systems/:system_id/LogServices/EventLog/Entries",
+               get(systems::get_event_log_entries))
+        .route("/Systems/:system_id/LogServices/EventLog/Entries/:entry_id",
+               get(systems::get_event_log_entry))
+        .route("/Systems/:system_id/LogServices/EventLog/Actions/LogService.ClearLog",
+               post(systems::clear_event_log))
         // Chassis routes
         .route("/Chassis", get(chassis::get_chassis_collection))
         .route("/Chassis/:chassis_id", get(chassis::get_chassis))
