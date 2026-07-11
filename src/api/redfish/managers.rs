@@ -656,6 +656,173 @@ pub async fn get_manager_log_services(
     })))
 }
 
+/// GET /redfish/v1/Managers/{manager_id}/LogServices/BMC
+///
+/// The BMC log service — on OpenBMC backed by
+/// xyz.openbmc_project.Logging (same service as the system event log).
+pub async fn get_manager_bmc_log_service(
+    State(_state): State<Arc<AppState>>,
+    Path(manager_id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!("GET /redfish/v1/Managers/{}/LogServices/BMC", manager_id);
+    validate_manager_id(&manager_id)?;
+
+    Ok(Json(json!({
+        "@odata.type": "#LogService.v1_4_0.LogService",
+        "@odata.id": "/redfish/v1/Managers/bmc/LogServices/BMC",
+        "Id": "BMC",
+        "Name": "BMC Log Service",
+        "Description": "BMC System Event Log",
+        "ServiceEnabled": true,
+        "LogEntryType": "Event",
+        "OverWritePolicy": "WrapsWhenFull",
+        "DateTime": chrono::Utc::now().to_rfc3339(),
+        "DateTimeLocalOffset": "+00:00",
+        "Entries": {
+            "@odata.id": "/redfish/v1/Managers/bmc/LogServices/BMC/Entries"
+        },
+        "Actions": {
+            "#LogService.ClearLog": {
+                "target": "/redfish/v1/Managers/bmc/LogServices/BMC/Actions/LogService.ClearLog"
+            }
+        },
+        "Status": { "State": "Enabled", "Health": "OK" }
+    })))
+}
+
+/// GET /redfish/v1/Managers/{manager_id}/LogServices/BMC/Entries
+///
+/// Returns BMC log entries from xyz.openbmc_project.Logging.
+/// Shares the same DBus source as the System EventLog entries.
+pub async fn get_manager_bmc_log_entries(
+    State(state): State<Arc<AppState>>,
+    Path(manager_id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!(
+        "GET /redfish/v1/Managers/{}/LogServices/BMC/Entries",
+        manager_id
+    );
+    validate_manager_id(&manager_id)?;
+
+    let members: Vec<Value> = if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        match client
+            .get_managed_objects(
+                "xyz.openbmc_project.Logging",
+                "/xyz/openbmc_project/logging",
+            )
+            .await
+        {
+            Ok(objects) => {
+                let entry_iface = "xyz.openbmc_project.Logging.Entry";
+                let mut entries: Vec<(u64, Value)> = objects
+                    .iter()
+                    .filter(|(path, ifaces)| {
+                        ifaces.contains_key(entry_iface)
+                            && path.contains("/logging/entry/")
+                    })
+                    .filter_map(|(path, ifaces)| {
+                        let props = &ifaces[entry_iface];
+                        let id_num = path
+                            .rsplit('/')
+                            .next()
+                            .and_then(|s| s.parse::<u64>().ok())
+                            .unwrap_or(0);
+                        let msg = props
+                            .get("Message")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("Unknown")
+                            .to_string();
+                        let severity_raw = props
+                            .get("Severity")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let severity = if severity_raw.ends_with(".Error") || severity_raw.ends_with(".Critical") {
+                            "Critical"
+                        } else if severity_raw.ends_with(".Warning") {
+                            "Warning"
+                        } else {
+                            "OK"
+                        };
+                        let ts_ms = props
+                            .get("Timestamp")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+                        use chrono::{TimeZone, Utc};
+                        let secs = (ts_ms / 1000) as i64;
+                        let created = Utc.timestamp_opt(secs, 0)
+                            .single()
+                            .map(|dt| dt.to_rfc3339())
+                            .unwrap_or_else(|| "1970-01-01T00:00:00Z".to_string());
+                        let entry_id = id_num.to_string();
+                        let entry = json!({
+                            "@odata.type": "#LogEntry.v1_15_0.LogEntry",
+                            "@odata.id": format!(
+                                "/redfish/v1/Managers/bmc/LogServices/BMC/Entries/{}",
+                                entry_id
+                            ),
+                            "Id": entry_id,
+                            "Name": format!("Log Entry {}", entry_id),
+                            "EntryType": "Event",
+                            "Severity": severity,
+                            "Created": created,
+                            "Message": msg
+                        });
+                        Some((id_num, entry))
+                    })
+                    .collect();
+                entries.sort_by(|a, b| b.0.cmp(&a.0));
+                entries.into_iter().map(|(_, v)| v).collect()
+            }
+            Err(e) => {
+                warn!("Failed to read BMC log entries from DBus: {}", e);
+                vec![]
+            }
+        }
+    } else {
+        vec![]
+    };
+
+    Ok(Json(json!({
+        "@odata.type": "#LogEntryCollection.LogEntryCollection",
+        "@odata.id": "/redfish/v1/Managers/bmc/LogServices/BMC/Entries",
+        "Name": "BMC Log Entries",
+        "Description": "Collection of BMC log entries",
+        "Members@odata.count": members.len(),
+        "Members": members
+    })))
+}
+
+/// POST /redfish/v1/Managers/{manager_id}/LogServices/BMC/Actions/LogService.ClearLog
+pub async fn clear_manager_bmc_log(
+    State(state): State<Arc<AppState>>,
+    Path(manager_id): Path<String>,
+) -> Result<StatusCode, StatusCode> {
+    debug!(
+        "POST /redfish/v1/Managers/{}/LogServices/BMC/Actions/LogService.ClearLog",
+        manager_id
+    );
+    validate_manager_id(&manager_id)?;
+
+    if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        match client
+            .call_method(
+                "xyz.openbmc_project.Logging",
+                "/xyz/openbmc_project/logging",
+                "xyz.openbmc_project.Collection.DeleteAll",
+                "DeleteAll",
+                None,
+            )
+            .await
+        {
+            Ok(_) => info!("BMC log cleared via DBus"),
+            Err(e) => warn!("Failed to clear BMC log via DBus: {}", e),
+        }
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -6,6 +6,7 @@ use axum::{Router, routing::{get, patch, post}};
 use std::sync::Arc;
 
 pub mod accounts;
+pub mod certificate_service;
 pub mod chassis;
 pub mod event_service;
 pub mod managers;
@@ -13,6 +14,7 @@ pub mod service_root;
 pub mod sessions;
 pub mod systems;
 pub mod task_service;
+pub mod telemetry_service;
 pub mod update_service;
 
 use crate::AppState;
@@ -40,6 +42,8 @@ pub fn router() -> Router<Arc<AppState>> {
                get(systems::get_storage_collection))
         .route("/Systems/:system_id/EthernetInterfaces",
                get(systems::get_ethernet_interfaces_collection))
+        .route("/Systems/:system_id/NetworkInterfaces",
+               get(systems::get_network_interfaces_collection))
         .route("/Systems/:system_id/LogServices",
                get(systems::get_system_log_services))
         .route("/Systems/:system_id/LogServices/EventLog",
@@ -73,6 +77,12 @@ pub fn router() -> Router<Arc<AppState>> {
                .patch(managers::patch_manager_ethernet_interface))
         .route("/Managers/:manager_id/LogServices",
                get(managers::get_manager_log_services))
+        .route("/Managers/:manager_id/LogServices/BMC",
+               get(managers::get_manager_bmc_log_service))
+        .route("/Managers/:manager_id/LogServices/BMC/Entries",
+               get(managers::get_manager_bmc_log_entries))
+        .route("/Managers/:manager_id/LogServices/BMC/Actions/LogService.ClearLog",
+               post(managers::clear_manager_bmc_log))
         // SessionService routes.
         // NOTE: POST /SessionService/Sessions (login) is intentionally NOT
         // registered here — it is served from the unauthenticated login router
@@ -121,7 +131,18 @@ pub fn router() -> Router<Arc<AppState>> {
                get(update_service::get_firmware_inventory))
         .route("/UpdateService/Actions/UpdateService.SimpleUpdate",
                post(update_service::simple_update))
-        // Placeholder routes for future services:
-        // .route("/TelemetryService", get(telemetry_service::get_telemetry_service))
-        // .route("/CertificateService", get(certificate_service::get_certificate_service))
+        // CertificateService routes
+        .route("/CertificateService",
+               get(certificate_service::get_certificate_service))
+        .route("/CertificateService/CertificateLocations",
+               get(certificate_service::get_certificate_locations))
+        // TelemetryService routes
+        .route("/TelemetryService",
+               get(telemetry_service::get_telemetry_service))
+        .route("/TelemetryService/MetricDefinitions",
+               get(telemetry_service::get_metric_definitions))
+        .route("/TelemetryService/MetricReportDefinitions",
+               get(telemetry_service::get_metric_report_definitions))
+        .route("/TelemetryService/MetricReports",
+               get(telemetry_service::get_metric_reports))
 }

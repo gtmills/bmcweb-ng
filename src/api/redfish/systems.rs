@@ -1058,11 +1058,34 @@ pub async fn get_ethernet_interfaces_collection(
     debug!("GET /redfish/v1/Systems/{}/EthernetInterfaces", system_id);
     validate_system_id(&system_id)?;
 
-    // TODO: Enumerate host NIC interfaces from DBus
+    // Host-side NICs — BMC does not enumerate host NICs on QEMU;
+    // a real platform would call GetManagedObjects on the host network service.
     Ok(Json(json!({
         "@odata.type": "#EthernetInterfaceCollection.EthernetInterfaceCollection",
         "@odata.id": "/redfish/v1/Systems/system/EthernetInterfaces",
         "Name": "Ethernet Interface Collection",
+        "Members@odata.count": 0,
+        "Members": []
+    })))
+}
+
+/// GET /redfish/v1/Systems/{system_id}/NetworkInterfaces
+///
+/// NetworkInterface resources aggregate network adapter hardware.
+/// On OpenBMC QEMU there are no discrete NICs to report; returns an empty
+/// collection so that clients discover the correct endpoint via the link.
+pub async fn get_network_interfaces_collection(
+    State(_state): State<Arc<AppState>>,
+    Path(system_id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!("GET /redfish/v1/Systems/{}/NetworkInterfaces", system_id);
+    validate_system_id(&system_id)?;
+
+    Ok(Json(json!({
+        "@odata.type": "#NetworkInterfaceCollection.NetworkInterfaceCollection",
+        "@odata.id": "/redfish/v1/Systems/system/NetworkInterfaces",
+        "Name": "Network Interface Collection",
+        "Description": "Collection of host network interface adapters",
         "Members@odata.count": 0,
         "Members": []
     })))
