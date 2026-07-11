@@ -3,7 +3,7 @@
 ## Overview
 This document tracks the development progress of bmcweb-ng, a Rust rewrite of the OpenBMC bmcweb server.
 
-**Last Updated:** 2026-07-11
+**Last Updated:** 2026-07-14
 
 ## Project Structure
 
@@ -28,7 +28,7 @@ bmcweb-ng/
 │   │   │   ├── managers.rs      ✅ Managers + NetworkProtocol/EthernetInterfaces/LogServices
 │   │   │   ├── sessions.rs      ✅ SessionService + Sessions (full login flow)
 │   │   │   ├── accounts.rs      ✅ AccountService + Accounts + Roles
-│   │   │   ├── event_service.rs      ✅ EventService + Subscriptions + SubmitTestEvent
+│   │   │   ├── event_service.rs      ✅ EventService + Subscriptions + SubmitTestEvent + SSE
 │   │   │   ├── task_service.rs       ✅ TaskService + Tasks
 │   │   │   ├── update_service.rs     ✅ UpdateService + FirmwareInventory + SimpleUpdate
 │   │   │   ├── certificate_service.rs ✅ CertificateService + CertificateLocations
@@ -239,7 +239,7 @@ bmcweb-ng/
 | Redfish Managers | ✅ | ✅ | GET+PATCH NIC; live FirmwareVersion/hostname/NTP; Reset via DBus |
 | SessionService | ✅ | ✅ | Full login flow, X-Auth-Token, role fetched from DBus |
 | AccountService | ✅ | ✅ | Full CRUD + PATCH lockout policy + PrivilegeMap |
-| EventService | ✅ | ✅ | Subscriptions + SubmitTestEvent |
+| EventService | ✅ | ✅ | Subscriptions + SubmitTestEvent + SSE stream + persisted PATCH settings |
 | TaskService | ✅ | ✅ | Collection + instance management |
 | UpdateService | ✅ | ✅ | FirmwareInventory from DBus + SimpleUpdate |
 | CertificateService | ✅ | ✅ | GET + CertificateLocations |

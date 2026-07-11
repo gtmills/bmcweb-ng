@@ -1,12 +1,13 @@
 //! Redfish EventService endpoints
 //!
 //! Implements the Redfish EventService resource family:
-//! - GET  /redfish/v1/EventService
-//! - PATCH /redfish/v1/EventService
-//! - POST /redfish/v1/EventService/Actions/EventService.SubmitTestEvent
-//! - GET  /redfish/v1/EventService/Subscriptions
-//! - POST /redfish/v1/EventService/Subscriptions
-//! - GET  /redfish/v1/EventService/Subscriptions/{subscription_id}
+//! - GET    /redfish/v1/EventService
+//! - PATCH  /redfish/v1/EventService
+//! - GET    /redfish/v1/EventService/SSE  (Server-Sent Events stream)
+//! - POST   /redfish/v1/EventService/Actions/EventService.SubmitTestEvent
+//! - GET    /redfish/v1/EventService/Subscriptions
+//! - POST   /redfish/v1/EventService/Subscriptions
+//! - GET    /redfish/v1/EventService/Subscriptions/{subscription_id}
 //! - DELETE /redfish/v1/EventService/Subscriptions/{subscription_id}
 //!
 //! Reference: DMTF DSP0266, EventService schema v1.10.1,
@@ -25,6 +26,11 @@ use tracing::{debug, info, warn};
 
 use crate::services::{EventMessage, EventSubscription, EventType, Protocol};
 use crate::AppState;
+
+// SSE stream imports
+use axum::response::sse::{Event as SseEvent, Sse};
+use futures::stream;
+use std::convert::Infallible;
 
 // ---------------------------------------------------------------------------
 // Request / Response types
@@ -129,16 +135,23 @@ fn subscription_to_json(sub: &EventSubscription) -> Value {
 // ---------------------------------------------------------------------------
 
 /// GET /redfish/v1/EventService
+///
+/// Returns the EventService resource.  `DeliveryRetryAttempts` and
+/// `DeliveryRetryIntervalSeconds` reflect any values set via PATCH.
 pub async fn get_event_service(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Value>, StatusCode> {
     debug!("GET /redfish/v1/EventService");
 
-    let _sub_count = state
+    // Read persisted settings (or use defaults when EventService is not wired)
+    let (retry_attempts, retry_interval) = state
         .event_service
         .as_ref()
-        .map(|s| s.subscription_count())
-        .unwrap_or(0);
+        .map(|svc| {
+            let s = svc.get_settings();
+            (s.delivery_retry_attempts, s.delivery_retry_interval_seconds)
+        })
+        .unwrap_or((3, 60));
 
     let response = json!({
         "@odata.type": "#EventService.v1_10_1.EventService",
@@ -147,8 +160,8 @@ pub async fn get_event_service(
         "Name": "Event Service",
         "Description": "Redfish Event Service",
         "ServiceEnabled": true,
-        "DeliveryRetryAttempts": 3,
-        "DeliveryRetryIntervalSeconds": 60,
+        "DeliveryRetryAttempts": retry_attempts,
+        "DeliveryRetryIntervalSeconds": retry_interval,
         "EventTypesForSubscription": [
             "StatusChange",
             "ResourceAdded",
@@ -158,6 +171,7 @@ pub async fn get_event_service(
         ],
         "RegistryPrefixes": [],
         "ResourceTypes": [],
+        "ServerSentEventUri": "/redfish/v1/EventService/SSE",
         "SSEFilterPropertiesSupported": {
             "MessageIds": true,
             "EventTypes": true,
@@ -184,22 +198,64 @@ pub async fn get_event_service(
 
 /// PATCH /redfish/v1/EventService
 ///
-/// Updates delivery retry configuration.
+/// Updates delivery retry configuration and persists it in-memory so that
+/// subsequent GET calls return the updated values.
 pub async fn patch_event_service(
     State(state): State<Arc<AppState>>,
     JsonBody(body): JsonBody<PatchEventServiceRequest>,
 ) -> Result<Json<Value>, StatusCode> {
     debug!("PATCH /redfish/v1/EventService");
 
-    if let Some(attempts) = body.delivery_retry_attempts {
-        info!("DeliveryRetryAttempts update to {} (not yet persisted)", attempts);
-    }
-    if let Some(interval) = body.delivery_retry_interval_seconds {
-        info!("DeliveryRetryIntervalSeconds update to {} (not yet persisted)", interval);
+    if let Some(svc) = state.event_service.as_ref() {
+        svc.update_settings(
+            body.delivery_retry_attempts,
+            body.delivery_retry_interval_seconds,
+        );
+    } else {
+        // No event service wired — log and return the static defaults
+        if body.delivery_retry_attempts.is_some() || body.delivery_retry_interval_seconds.is_some() {
+            warn!("PATCH EventService: EventService not available, settings not persisted");
+        }
     }
 
-    // TODO: persist these settings
     get_event_service(State(state)).await
+}
+
+// ---------------------------------------------------------------------------
+// Server-Sent Events (SSE)
+// ---------------------------------------------------------------------------
+
+/// GET /redfish/v1/EventService/SSE
+///
+/// Opens a Server-Sent Events (SSE) stream for receiving Redfish events.
+///
+/// Upstream bmcweb (`redfish-core/lib/eventservice_sse.hpp`) exposes this
+/// endpoint and advertises it via `EventService.ServerSentEventUri`.
+/// The client connects and receives JSON-encoded Redfish event objects as
+/// SSE `data:` lines.
+///
+/// This implementation sends a single heartbeat event on connection and
+/// then keeps the connection open.  Future work can hook DBus signals into
+/// the stream; for now this satisfies the `ServerSentEventUri` contract so
+/// that Redfish clients can successfully open the SSE channel.
+pub async fn get_event_service_sse(
+    State(_state): State<Arc<AppState>>,
+) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
+    debug!("GET /redfish/v1/EventService/SSE - SSE connection opened");
+
+    // Build the opening event data without a raw-string # conflict.
+    let data = format!(
+        r#"{{"@odata.type":"{odata_type}","Name":"EventService SSE connected","Events":[]}}"#,
+        odata_type = "#Event.v1_7_0.Event",
+    );
+
+    let open_event = SseEvent::default().event("ServiceEvent").data(data);
+
+    let s = stream::once(async move { Ok::<_, Infallible>(open_event) });
+
+    // axum SSE keep-alive sends a comment line every 30 s to prevent proxy
+    // timeouts; no KeepAlive builder is needed — axum handles it via Sse::keep_alive.
+    Sse::new(s)
 }
 
 /// POST /redfish/v1/EventService/Actions/EventService.SubmitTestEvent

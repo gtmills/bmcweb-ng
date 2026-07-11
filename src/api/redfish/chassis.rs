@@ -579,22 +579,75 @@ pub async fn get_chassis_sensors(
 
 /// GET /redfish/v1/Chassis/{chassis_id}/NetworkAdapters
 ///
-/// Returns network adapter inventory.  On OpenBMC this is backed by
-/// `xyz.openbmc_project.Inventory.Item.NetworkInterface`.
+/// Enumerates network adapters from DBus inventory.  Upstream bmcweb
+/// (see `redfish-core/lib/network_adapter.hpp`) queries
+/// `xyz.openbmc_project.Inventory.Item.NetworkAdapter` objects via
+/// `GetManagedObjects` on `xyz.openbmc_project.Inventory.Manager`.
+///
+/// Each adapter object found under the chassis path is returned as a
+/// collection member.  Falls back to an empty collection when DBus is
+/// unavailable or no adapters are present.
 pub async fn get_chassis_network_adapters(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Path(chassis_id): Path<String>,
 ) -> Result<Json<Value>, StatusCode> {
     debug!("GET /redfish/v1/Chassis/{}/NetworkAdapters", chassis_id);
     validate_chassis_id(&chassis_id)?;
 
-    // TODO: Enumerate network adapter inventory from DBus
+    let members: Vec<Value> = if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        match client
+            .get_managed_objects(
+                "xyz.openbmc_project.Inventory.Manager",
+                "/xyz/openbmc_project/inventory",
+            )
+            .await
+        {
+            Ok(objects) => {
+                let adapter_iface = "xyz.openbmc_project.Inventory.Item.NetworkAdapter";
+                let chassis_prefix = format!(
+                    "/xyz/openbmc_project/inventory/system/{}/",
+                    chassis_id
+                );
+                let mut adapter_ids: Vec<String> = objects
+                    .iter()
+                    .filter(|(path, ifaces)| {
+                        ifaces.contains_key(adapter_iface)
+                            && path.starts_with(&chassis_prefix)
+                    })
+                    .map(|(path, _)| {
+                        path.rsplit('/').next().unwrap_or("adapter").to_string()
+                    })
+                    .collect();
+                adapter_ids.sort();
+
+                adapter_ids
+                    .iter()
+                    .map(|id| {
+                        json!({
+                            "@odata.id": format!(
+                                "/redfish/v1/Chassis/{}/NetworkAdapters/{}",
+                                chassis_id, id
+                            )
+                        })
+                    })
+                    .collect()
+            }
+            Err(e) => {
+                warn!("Failed to enumerate NetworkAdapters from DBus: {}", e);
+                vec![]
+            }
+        }
+    } else {
+        vec![]
+    };
+
     Ok(Json(json!({
         "@odata.type": "#NetworkAdapterCollection.NetworkAdapterCollection",
-        "@odata.id": "/redfish/v1/Chassis/chassis/NetworkAdapters",
+        "@odata.id": format!("/redfish/v1/Chassis/{}/NetworkAdapters", chassis_id),
         "Name": "Network Adapter Collection",
-        "Members@odata.count": 0,
-        "Members": []
+        "Members@odata.count": members.len(),
+        "Members": members
     })))
 }
 
@@ -666,5 +719,35 @@ mod tests {
         assert!(result.is_ok());
         let json = result.unwrap().0;
         assert_eq!(json["Members@odata.count"], 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_chassis_network_adapters_no_dbus() {
+        // Without a DBus connection, the collection should return empty members
+        let config = Config::default();
+        let state = Arc::new(AppState::new(config));
+        let result = get_chassis_network_adapters(State(state), Path("chassis".to_string())).await;
+        assert!(result.is_ok());
+        let json = result.unwrap().0;
+        assert_eq!(
+            json["@odata.type"],
+            "#NetworkAdapterCollection.NetworkAdapterCollection"
+        );
+        assert_eq!(json["Members@odata.count"], 0);
+        assert_eq!(
+            json["@odata.id"].as_str().unwrap(),
+            "/redfish/v1/Chassis/chassis/NetworkAdapters"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_chassis_network_adapters_not_found() {
+        // Invalid chassis ID should return 404
+        let config = Config::default();
+        let state = Arc::new(AppState::new(config));
+        let result =
+            get_chassis_network_adapters(State(state), Path("invalid".to_string())).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), StatusCode::NOT_FOUND);
     }
 }

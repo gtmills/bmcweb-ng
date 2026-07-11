@@ -3,26 +3,24 @@
 [server]
 bind_address = "0.0.0.0"
 port = 443
+# TLS certificate and key paths.  Leave empty to run plain HTTP (e.g. for QEMU testing).
+# Self-signed certificates are generated automatically if these paths do not exist.
 tls_cert = "/etc/bmcweb/cert.pem"
-tls_key = "/etc/bmcweb/key.pem"
+tls_key  = "/etc/bmcweb/key.pem"
 max_connections = 100
 
 [auth]
-methods = ["basic", "session", "mtls"]
+# Authentication uses HTTP Basic (with PAM) and session tokens (X-Auth-Token).
+# mTLS is not yet implemented.
 session_timeout_seconds = 3600
 max_sessions = 64
 
-[features]
-redfish = true
-dbus_rest = true
-kvm = true
-virtual_media = true
-event_service = true
-
 [logging]
+# Log level: error | warn | info | debug | trace
+# Can also be set via RUST_LOG environment variable.
 level = "info"
-format = "json"
 
 [metrics]
+# Expose Prometheus metrics at GET /metrics
 enabled = true
 port = 9090

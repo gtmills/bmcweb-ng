@@ -5,6 +5,44 @@ All notable changes to bmcweb-ng will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **NetworkAdapters DBus enumeration** (`chassis.rs`) —
+  `GET /Chassis/{chassis_id}/NetworkAdapters` now queries
+  `xyz.openbmc_project.Inventory.Item.NetworkAdapter` via `GetManagedObjects`
+  on `xyz.openbmc_project.Inventory.Manager`, filtering to objects under the
+  chassis inventory path.  Falls back to an empty collection when DBus is
+  unavailable.  `@odata.id` now uses the dynamic `chassis_id` parameter.
+
+- **EventService PATCH persistence** (`services/event.rs`, `event_service.rs`) —
+  `DeliveryRetryAttempts` and `DeliveryRetryIntervalSeconds` are now stored in
+  `EventServiceSettings` behind an `RwLock` on `EventService`.  `PATCH
+  /redfish/v1/EventService` calls `update_settings()` so subsequent GET calls
+  return the updated values instead of hard-coded defaults.
+
+- **Server-Sent Events endpoint** (`event_service.rs`, `redfish/mod.rs`) —
+  `GET /redfish/v1/EventService/SSE` implemented per upstream bmcweb
+  `eventservice_sse.hpp`.  Returns an axum `Sse` stream that sends a single
+  heartbeat event on connect.  `ServerSentEventUri` field added to the
+  EventService GET response.
+
+### Changed
+
+- `config/mod.rs`: removed unused `FeaturesConfig` struct and `methods` field
+  from `AuthConfig`; removed `format` field from `LoggingConfig`.  These fields
+  were present in `config.toml` and the struct but were never read by any handler.
+- `config.toml`: removed `[features]` section and `methods` key from `[auth]`;
+  removed `format` from `[logging]`; added explanatory comments.
+
+### Tests
+
+- 121 unit tests passing (up from 120); 2 new tests for `NetworkAdapters`
+  endpoint (no-DBus fallback and 404 for invalid chassis ID).
+
+---
+
 ## [0.2.0] - 2026-07-11
 
 ### Added

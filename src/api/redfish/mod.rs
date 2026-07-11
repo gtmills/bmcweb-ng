@@ -117,6 +117,7 @@ pub fn router() -> Router<Arc<AppState>> {
         // EventService routes
         .route("/EventService", get(event_service::get_event_service)
                .patch(event_service::patch_event_service))
+        .route("/EventService/SSE", get(event_service::get_event_service_sse))
         .route("/EventService/Actions/EventService.SubmitTestEvent",
                post(event_service::submit_test_event))
         .route("/EventService/Subscriptions",

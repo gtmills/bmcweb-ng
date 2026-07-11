@@ -1,6 +1,9 @@
 //! Event Service
 //!
-//! Implements the Redfish EventService for managing event subscriptions
+//! Implements the Redfish EventService for managing event subscriptions.
+//! Service-level settings (DeliveryRetryAttempts, DeliveryRetryIntervalSeconds)
+//! are stored in-memory via an `RwLock`-protected struct so that PATCH
+//! `/redfish/v1/EventService` actually persists within the process lifetime.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -169,11 +172,34 @@ impl EventPayload {
     }
 }
 
+/// Mutable service-level settings for EventService.
+///
+/// Stored behind an `RwLock` so PATCH `/redfish/v1/EventService` can update
+/// them and GET immediately reflects the new values.
+#[derive(Debug, Clone)]
+pub struct EventServiceSettings {
+    /// Number of delivery retries before giving up.  Redfish default: 3.
+    pub delivery_retry_attempts: u32,
+    /// Seconds between delivery retries.  Redfish default: 60.
+    pub delivery_retry_interval_seconds: u32,
+}
+
+impl Default for EventServiceSettings {
+    fn default() -> Self {
+        Self {
+            delivery_retry_attempts: 3,
+            delivery_retry_interval_seconds: 60,
+        }
+    }
+}
+
 /// Event Service for managing subscriptions and dispatching events
 #[derive(Debug, Clone)]
 pub struct EventService {
     subscriptions: Arc<RwLock<HashMap<String, EventSubscription>>>,
     max_subscriptions: usize,
+    /// Mutable service settings (retry policy, etc.)
+    settings: Arc<RwLock<EventServiceSettings>>,
 }
 
 impl EventService {
@@ -183,6 +209,29 @@ impl EventService {
         Self {
             subscriptions: Arc::new(RwLock::new(HashMap::new())),
             max_subscriptions,
+            settings: Arc::new(RwLock::new(EventServiceSettings::default())),
+        }
+    }
+
+    /// Get a snapshot of the current service settings.
+    pub fn get_settings(&self) -> EventServiceSettings {
+        self.settings.read().unwrap().clone()
+    }
+
+    /// Update service settings.  Only `Some` values are applied.
+    pub fn update_settings(
+        &self,
+        delivery_retry_attempts: Option<u32>,
+        delivery_retry_interval_seconds: Option<u32>,
+    ) {
+        let mut s = self.settings.write().unwrap();
+        if let Some(v) = delivery_retry_attempts {
+            info!("EventService: DeliveryRetryAttempts updated to {}", v);
+            s.delivery_retry_attempts = v;
+        }
+        if let Some(v) = delivery_retry_interval_seconds {
+            info!("EventService: DeliveryRetryIntervalSeconds updated to {}", v);
+            s.delivery_retry_interval_seconds = v;
         }
     }
 

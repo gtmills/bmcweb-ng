@@ -8,7 +8,6 @@ use std::path::Path;
 pub struct Config {
     pub server: ServerConfig,
     pub auth: AuthConfig,
-    pub features: FeaturesConfig,
     pub logging: LoggingConfig,
     pub metrics: MetricsConfig,
 }
@@ -26,26 +25,18 @@ pub struct ServerConfig {
 /// Authentication configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthConfig {
-    pub methods: Vec<String>,
+    /// Session timeout in seconds (default 3600)
     pub session_timeout_seconds: u64,
+    /// Maximum concurrent sessions (default 64)
     pub max_sessions: usize,
-}
-
-/// Feature flags
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FeaturesConfig {
-    pub redfish: bool,
-    pub dbus_rest: bool,
-    pub kvm: bool,
-    pub virtual_media: bool,
-    pub event_service: bool,
 }
 
 /// Logging configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoggingConfig {
+    /// Log level string passed to tracing-subscriber (info/debug/warn/error/trace).
+    /// Can be overridden by the RUST_LOG environment variable.
     pub level: String,
-    pub format: String,
 }
 
 /// Metrics configuration
@@ -74,20 +65,11 @@ impl Config {
                 max_connections: 100,
             },
             auth: AuthConfig {
-                methods: vec!["basic".to_string(), "session".to_string()],
                 session_timeout_seconds: 3600,
                 max_sessions: 64,
             },
-            features: FeaturesConfig {
-                redfish: true,
-                dbus_rest: true,
-                kvm: true,
-                virtual_media: true,
-                event_service: true,
-            },
             logging: LoggingConfig {
                 level: "info".to_string(),
-                format: "json".to_string(),
             },
             metrics: MetricsConfig {
                 enabled: true,
