@@ -258,16 +258,26 @@ stop_qemu() {
 trap 'stop_qemu' EXIT
 
 info "Starting QEMU (OpenBMC qemuarm)..."
+# The qemuarm machine is 'virt' (virtio), not 'versatilepb'.
+# Parameters derived from obmc-phosphor-image-qemuarm.qemuboot.conf.
 "${QEMU_BINARY}" \
-    -machine    versatilepb \
+    -machine    "virt,highmem=off" \
+    -cpu        cortex-a15 \
     -m          256 \
-    -drive      "file=${rw_rootfs},if=virtio,format=raw" \
-    -net        "nic" \
-    -net        "user,hostfwd=tcp::${BMC_PORT}-:443,hostfwd=tcp::${SSH_PORT}-:22,hostfwd=tcp::2080-:80" \
+    -smp        4 \
     -kernel     "${KERNEL}" \
-    -dtb        "${DTB}" \
-    -append     "root=/dev/vda rw console=ttyAMA0,115200 ignore_loglevel" \
+    -drive      "id=disk0,file=${rw_rootfs},if=none,format=raw" \
+    -device     "virtio-blk-device,drive=disk0" \
+    -netdev     "user,id=net0,hostfwd=tcp::${BMC_PORT}-:443,hostfwd=tcp::${SSH_PORT}-:22,hostfwd=tcp::2080-:80" \
+    -device     "virtio-net-device,netdev=net0" \
+    -device     "virtio-serial-device" \
+    -chardev    "null,id=virtcon" \
+    -device     "virtconsole,chardev=virtcon" \
+    -object     "rng-random,filename=/dev/urandom,id=rng0" \
+    -device     "virtio-rng-pci,rng=rng0" \
+    -append     "root=/dev/vda rw console=ttyAMA0,115200 ip=dhcp swiotlb=0 ignore_loglevel net.ifnames=0" \
     -display    none \
+    -audio      none \
     -serial     "file:${QEMU_LOG}" \
     -pidfile    "${QEMU_PIDFILE}" \
     -daemonize 2>&1 || {

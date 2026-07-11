@@ -16,7 +16,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 WORK_DIR="${REPO_DIR}/target/qemu-test"
 IMG_DIR="${WORK_DIR}/image"
-OPENBMC_DIR="${WORK_DIR}/openbmc-src"
+
+# Bitbake requires UNIX domain sockets which are NOT supported on Windows NTFS
+# mounts (/mnt/c/...). Clone and build must happen on the native Linux filesystem.
+# We use ~/openbmc-build (inside WSL's ext4 filesystem) and symlink the output
+# images back to WORK_DIR/image when done.
+LINUX_BUILD_BASE="${OPENBMC_BUILD_DIR:-${HOME}/openbmc-build}"
+OPENBMC_DIR="${LINUX_BUILD_BASE}/openbmc-src"
+BITBAKE_BUILD_DIR="${LINUX_BUILD_BASE}/build"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
 info()  { echo -e "${GREEN}[INFO]${NC}  $*"; }
@@ -39,16 +46,20 @@ need_cmd() {
 need_cmd git git
 need_cmd python3 python3
 
-# Check disk space — OpenBMC build needs ~50GB
-free_gb=$(df -BG "${WORK_DIR}" 2>/dev/null | awk 'NR==2{print $4}' | tr -d 'G')
+mkdir -p "${LINUX_BUILD_BASE}"
+
+# Check disk space on the Linux filesystem (not /mnt/c)
+free_gb=$(df -BG "${LINUX_BUILD_BASE}" 2>/dev/null | awk 'NR==2{print $4}' | tr -d 'G')
 if [[ "${free_gb:-0}" -lt 30 ]]; then
-    warn "Only ${free_gb}GB free. OpenBMC build needs ~50GB. Proceeding anyway..."
+    warn "Only ${free_gb}GB free on ${LINUX_BUILD_BASE}. OpenBMC build needs ~50GB."
+    warn "If your WSL virtual disk is small, expand it or set OPENBMC_BUILD_DIR to a larger path."
 fi
 
 # ── Clone OpenBMC (shallow, just the tag) ─────────────────────────────────────
 step "Cloning OpenBMC source (tag 2.18.0, shallow)..."
 
 if [[ ! -d "${OPENBMC_DIR}/.git" ]]; then
+    info "Cloning into Linux filesystem: ${OPENBMC_DIR}"
     git clone --depth 1 --branch 2.18.0 \
         https://github.com/openbmc/openbmc.git \
         "${OPENBMC_DIR}" 2>&1
@@ -63,9 +74,9 @@ step "Installing Yocto build dependencies..."
 sudo apt-get install -y \
     gawk wget git diffstat unzip texinfo gcc build-essential chrpath socat \
     cpio python3 python3-pip python3-pexpect xz-utils debianutils \
-    iputils-ping python3-git python3-jinja2 libegl1-mesa libsdl1.2-dev \
+    iputils-ping python3-git python3-jinja2 libsdl1.2-dev \
     xterm python3-subunit mesa-common-dev zstd liblz4-tool file locales \
-    libacl1 2>&1 | tail -5
+    libacl1 libegl-dev 2>&1 | tail -5
 
 sudo locale-gen en_US.UTF-8 2>/dev/null || true
 
@@ -74,24 +85,32 @@ step "Configuring OpenBMC for qemuarm target..."
 
 cd "${OPENBMC_DIR}"
 
-# Source the OpenBMC build environment
-# This sets up the bitbake environment for the qemuarm machine
-. setup qemuarm "${WORK_DIR}/openbmc-build" 2>&1 | tail -5
+# The OpenBMC setup script checks ZSH_NAME which is unset in bash under
+# 'set -u'. Temporarily disable unbound-variable checking around it.
+# Do NOT pipe through | tail — that runs setup in a subshell and loses exports.
+set +u
+# shellcheck disable=SC1091
+. setup qemuarm "${BITBAKE_BUILD_DIR}"
+set -u
+info "OpenBMC build environment configured. BUILDDIR=${BUILDDIR:-unknown}"
 
 step "Building obmc-phosphor-image for qemuarm (this takes 20-60 min)..."
-info "You can monitor progress with: tail -f ${WORK_DIR}/openbmc-build/bitbake.log"
+info "Build dir (Linux fs, supports UNIX sockets): ${BITBAKE_BUILD_DIR}"
+info "Monitor progress: tail -f ${BITBAKE_BUILD_DIR}/bitbake.log"
 
 # Set parallel jobs based on CPU count
 NCPU=$(nproc)
 export BB_NUMBER_THREADS="${NCPU}"
 export PARALLEL_MAKE="-j${NCPU}"
 
-bitbake obmc-phosphor-image 2>&1 | tee "${WORK_DIR}/openbmc-build/bitbake.log" | grep -E "^(NOTE|WARNING|ERROR|Build|Running|Setscene)" || true
+# bitbake must run from the build directory
+cd "${BITBAKE_BUILD_DIR}"
+bitbake obmc-phosphor-image 2>&1 | tee "${BITBAKE_BUILD_DIR}/bitbake.log" | grep -E "^(NOTE|WARNING|ERROR|Build|Running|Setscene)" || true
 
 # ── Copy output images ─────────────────────────────────────────────────────────
 step "Copying built images to ${IMG_DIR}..."
 
-DEPLOY="${WORK_DIR}/openbmc-build/tmp/deploy/images/qemuarm"
+DEPLOY="${BITBAKE_BUILD_DIR}/tmp/deploy/images/qemuarm"
 
 if [[ ! -d "${DEPLOY}" ]]; then
     error "Build output not found at ${DEPLOY}"

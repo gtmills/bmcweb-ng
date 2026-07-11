@@ -3,7 +3,7 @@
 ## Overview
 This document tracks the development progress of bmcweb-ng, a Rust rewrite of the OpenBMC bmcweb server.
 
-**Last Updated:** 2026-05-01
+**Last Updated:** 2026-07-11
 
 ## Project Structure
 
@@ -209,6 +209,19 @@ bmcweb-ng/
 | Systemd Integration | ✅ | ✅ | Service + socket files |
 | Persistent UUID | ✅ | ✅ | Atomic JSON persistence |
 | Prometheus Metrics | ❌ | ✅ | Additional capability |
+
+### Performance Measurements (QEMU, July 2026)
+
+Measured on OpenBMC `qemuarm` (emulated Cortex-A15, 256 MB RAM). Binary:
+`bmcwebd-ng v0.1.0`, `opt-level="z"`, LTO, stripped, `arm-unknown-linux-gnueabihf`.
+
+| Metric | Target | Measured | Status |
+|--------|--------|----------|--------|
+| Binary Size | <1MB | 4.75 MB | ⚠️ Over (musl static needed for <5 MB) |
+| Memory RSS (idle) | <10MB | **5.7 MB** | ✅ Met |
+| Startup Time | <1s | ~1.6s | ⚠️ Over on QEMU (~5-10× slower than bare metal) |
+| Request Latency (p99) | <100ms | **7ms** | ✅ Met |
+| Concurrent 20 GETs | — | 20/20 ✅ | ✅ All successful |
 
 ## Development Roadmap
 
