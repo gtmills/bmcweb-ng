@@ -147,78 +147,73 @@ of being started.
 
 ## Smoke Test Suite
 
-The test script (`qemu_test_v3.sh`) runs **56 checks** in four groups:
+The test script (`qemu_test_v3.sh`) runs **63 checks**:
 
-### Original 17 smoke tests
-
-| Category | Endpoints tested |
-|----------|-----------------|
-| ServiceRoot | `/redfish/v1` (version, type) |
-| Systems | collection + instance |
-| Chassis | collection |
-| Managers | collection + instance type |
-| SessionService | service enabled, POST login → HTTP 201 |
-| AccountService | Administrator role |
-| TaskService | service enabled |
-| UpdateService | service enabled, FirmwareInventory |
-| EventService | service enabled |
-| NetworkProtocol | type field |
-| EthernetInterfaces | type field |
-| Auth enforcement | unauthenticated GET → 401 |
-
-### Round 1 — DBus wiring (10 additional)
-
-| Category | What is verified |
-|----------|-----------------|
-| PowerState | Valid On/Off/Unknown (live DBus or fallback) |
-| FirmwareVersion | Field present in Manager response |
-| HostName | Present in NetworkProtocol response |
-| MACAddress | Present in EthernetInterface/eth0 response |
-| Token auth | X-Auth-Token session → GET /Systems/system HTTP 200 |
-| LogServices/EventLog | Instance endpoint returns correct type + Entries link |
-| Processors collection | Correct @odata.type |
-| Memory collection | Correct @odata.type |
-| Chassis enumeration | Dynamic DBus enumeration + `/Chassis/chassis` valid |
-| 404 enforcement | Bad Processor/Memory/Chassis IDs return 404 |
-
-### Round 2 — Extended DBus (6 additional)
-
-| Category | What is verified |
-|----------|-----------------|
-| Chassis Power | `/Chassis/chassis/Power` returns correct type |
-| Chassis Thermal | `/Chassis/chassis/Thermal` returns correct type |
-| Chassis Sensors | `/Chassis/chassis/Sensors` returns correct type |
-| BMC reset action | POST `Manager.Reset` returns 204 |
-| System reset action | POST `ComputerSystem.Reset` returns 204 |
-| NIC enumeration | EthernetInterfaces count ≥ 1 |
-
-### Rounds 3–10 — Full DBus wiring (23 additional)
-
-| Category | What is verified |
-|----------|-----------------|
-| Boot target | `BootSourceOverrideTarget` is a valid Redfish value or "None" |
-| EventLog Entries | Collection type + Members array present |
-| PATCH /Systems/system | Sets BootSourceOverrideTarget, returns 200 |
-| PATCH NetworkProtocol | Sets HostName, returns 200 |
-| Storage collection | `/Systems/system/Storage` returns correct type |
-| PATCH EthernetInterface | DHCPv4 patch returns 200 |
-| Dynamic NIC validation | GET by live NIC id returns 200 |
-| AssetTag | Present on GET /Systems/system |
-| PATCH AssetTag | PATCH succeeds and returns updated value |
-| Chassis LED | IndicatorLED field present |
-| PATCH Chassis LED | PATCH IndicatorLED returns 200 |
-| PowerConsumedWatts | Present in Chassis Power response |
-| FirmwareInventory DBus | Members list from live software objects |
-| CertificateService | `/redfish/v1/CertificateService` returns correct type |
-| TelemetryService | `/redfish/v1/TelemetryService` returns correct type |
-| Registries stub | `/redfish/v1/Registries` returns correct type |
-| JsonSchemas stub | `/redfish/v1/JsonSchemas` returns correct type |
-| AccountService lockout | MaxLoginAttemptBeforeLockout field present |
-| Create/delete account | POST + DELETE round-trip returns 201 / 200 |
-| Metrics endpoint | `/metrics` returns 200 with Prometheus text |
-| WebSocket serial | `/console0` upgrade returns 101 |
-| Concurrent GETs | 20 simultaneous GETs all return 200 |
-| Startup time | bmcweb-ng answers within 3 seconds of start |
+| # | Endpoint / Action | What is verified |
+|---|-------------------|-----------------|
+| 1 | `GET /redfish/v1` | `@odata.type` = ServiceRoot v1_15_0 |
+| 2 | `GET /redfish/v1` | `RedfishVersion` = 1.17.0 |
+| 3 | `GET /redfish/v1/Systems` | Correct collection type |
+| 4 | `GET /redfish/v1/Systems/system` | `Id` = system |
+| 5 | `GET /redfish/v1/Chassis` | Correct collection type |
+| 6 | `GET /redfish/v1/Managers` | Correct collection type |
+| 7 | `GET /redfish/v1/Managers/bmc` | `ManagerType` = BMC |
+| 8 | `GET /redfish/v1/SessionService` | `ServiceEnabled` = True |
+| 9 | `POST /redfish/v1/SessionService/Sessions` | HTTP 201 |
+| 10 | `GET /redfish/v1/AccountService/Roles/Administrator` | `IsPredefined` = True |
+| 11 | `GET /redfish/v1/TaskService` | `ServiceEnabled` = True |
+| 12 | `GET /redfish/v1/UpdateService` | `ServiceEnabled` = True |
+| 13 | `GET /redfish/v1/UpdateService/FirmwareInventory` | Correct collection type |
+| 14 | `GET /redfish/v1/EventService` | `ServiceEnabled` = True |
+| 15 | `GET /redfish/v1/Managers/bmc/NetworkProtocol` | Correct resource type |
+| 16 | `GET /redfish/v1/Managers/bmc/EthernetInterfaces` | Correct collection type |
+| 17 | Unauthenticated `GET /redfish/v1/Systems` | HTTP 401 |
+| 18 | `GET /redfish/v1/Systems/system` | `PowerState` is On, Off, or Unknown |
+| 19 | `GET /redfish/v1/Managers/bmc` | `FirmwareVersion` field present |
+| 20 | `GET /redfish/v1/Managers/bmc/NetworkProtocol` | `HostName` field present |
+| 21 | `GET /redfish/v1/Managers/bmc/EthernetInterfaces/eth0` | HTTP 200 |
+| 22 | `GET /redfish/v1/Managers/bmc/EthernetInterfaces/eth0` | `MACAddress` field present |
+| 23 | X-Auth-Token session login then `GET /Systems/system` | HTTP 200 |
+| 24 | `GET /redfish/v1/Systems/system/LogServices/EventLog` | Correct resource type |
+| 25 | `GET /redfish/v1/Systems/system/LogServices/EventLog` | `Id` = EventLog |
+| 26 | `GET /redfish/v1/Systems/system/LogServices/EventLog` | `Entries` link present |
+| 27 | `GET /redfish/v1/Systems/system/Processors` | Correct collection type |
+| 28 | `GET /redfish/v1/Systems/system/Memory` | Correct collection type |
+| 29 | `GET /redfish/v1/Chassis` | Correct collection type (dynamic enumeration) |
+| 30 | `GET /redfish/v1/Chassis/chassis` | `Id` = chassis |
+| 31 | `GET /redfish/v1/Systems/system/Processors/nonexistent999` | HTTP 404 |
+| 32 | `GET /redfish/v1/Systems/system/Memory/nonexistent999` | HTTP 404 |
+| 33 | `GET /redfish/v1/Chassis/badchassis999` | HTTP 404 |
+| 34 | `GET /redfish/v1/Systems/system` | `Boot.BootSourceOverrideTarget` is a valid Redfish value |
+| 35 | `GET /redfish/v1/Systems/system/LogServices/EventLog/Entries` | Correct collection type |
+| 36 | `GET /redfish/v1/Systems/system/LogServices/EventLog/Entries` | `Members` array present |
+| 37 | `PATCH /redfish/v1/Systems/system` | Boot override (Pxe/Once) returns 200 |
+| 38 | `PATCH /redfish/v1/Managers/bmc/NetworkProtocol` | HostName + NTPServers update returns 200 |
+| 39 | `GET /redfish/v1/CertificateService` | `Id` = CertificateService |
+| 40 | `GET /redfish/v1/TelemetryService` | `Id` = TelemetryService |
+| 41 | `GET /redfish/v1/TelemetryService/MetricDefinitions` | Correct collection type |
+| 42 | `GET /redfish/v1/Managers/bmc/LogServices/BMC` | `Id` = BMC |
+| 43 | `GET /redfish/v1/Managers/bmc/LogServices/BMC/Entries` | Correct collection type |
+| 44 | `GET /redfish/v1/Systems/system/NetworkInterfaces` | Correct collection type |
+| 45 | `GET /redfish/v1/AccountService` | `Id` = AccountService |
+| 46 | `GET /redfish/v1/AccountService/PrivilegeMap` | `Id` = PrivilegeMap |
+| 47 | `GET /redfish/v1/Registries` | Correct collection type |
+| 48 | `GET /redfish/v1/JsonSchemas` | Correct collection type |
+| 49 | `GET /redfish/v1/CertificateService/CertificateLocations` | `Id` = CertificateLocations |
+| 50 | `PATCH /redfish/v1/AccountService` | Lockout threshold update returns 200 |
+| 51 | `GET /redfish/v1/UpdateService/FirmwareInventory` | Correct collection type (DBus enriched) |
+| 52 | `GET /redfish/v1/Systems/system` | `AssetTag` field present |
+| 53 | `PATCH /redfish/v1/Systems/system` | AssetTag update returns 200 |
+| 54 | `GET /redfish/v1/Chassis/chassis` | `IndicatorLED` field present |
+| 55 | `PATCH /redfish/v1/Chassis/chassis` | IndicatorLED update returns 200 |
+| 56 | `GET /redfish/v1/Chassis/chassis/Power` | `PowerControl` array present |
+| 57 | `GET /health` | `status` is ok or degraded (JSON health endpoint) |
+| 58 | `GET /health` | `version` field present |
+| 59 | `PATCH /redfish/v1/SessionService` | `SessionTimeout` update returns 200 |
+| 60 | `GET /redfish/v1/SessionService` | `SessionTimeout` reflects patched value |
+| 61 | `PATCH /redfish/v1/EventService` | `DeliveryRetryAttempts` update returns 200 |
+| 62 | `GET /redfish/v1/EventService` | `DeliveryRetryAttempts` reflects patched value |
+| 63 | `GET /redfish/v1/Chassis/chassis/NetworkAdapters` | Correct collection type |
 
 ---
 
