@@ -29,6 +29,5 @@ pub async fn metrics_handler(
     }
 }
 
-// TODO: Implement additional observability modules:
-// - tracing.rs - OpenTelemetry tracing setup
-// - health.rs - Health check endpoints
+// The /health endpoint lives in protocol::http (health_handler).
+// OpenTelemetry tracing setup is planned for a future tracing.rs module.

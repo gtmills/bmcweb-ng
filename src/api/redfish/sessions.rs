@@ -124,12 +124,18 @@ fn session_to_json(session: &UserSession) -> Value {
 /// GET /redfish/v1/SessionService
 ///
 /// Returns the SessionService resource describing session management parameters.
+/// `SessionTimeout` reflects the live value including any PATCH updates.
 pub async fn get_session_service(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Value>, StatusCode> {
     debug!("GET /redfish/v1/SessionService");
 
-    let timeout = state.config.auth.session_timeout_seconds;
+    // Read the live timeout from the session store (may have been updated via PATCH).
+    let timeout = state
+        .session_store
+        .as_ref()
+        .map(|s| s.timeout_seconds() as u64)
+        .unwrap_or(state.config.auth.session_timeout_seconds);
 
     let response = json!({
         "@odata.type": "#SessionService.v1_0_2.SessionService",
@@ -149,7 +155,9 @@ pub async fn get_session_service(
 
 /// PATCH /redfish/v1/SessionService
 ///
-/// Allows updating the `SessionTimeout` value.  Valid range: 30–86400 seconds.
+/// Updates `SessionTimeout`.  Valid range: 30–86400 seconds.
+/// The new value is persisted in the `SessionStore` and immediately reflected
+/// in subsequent GET calls and new session expiration calculations.
 pub async fn patch_session_service(
     State(state): State<Arc<AppState>>,
     JsonBody(body): JsonBody<PatchSessionServiceRequest>,
@@ -157,20 +165,19 @@ pub async fn patch_session_service(
     debug!("PATCH /redfish/v1/SessionService");
 
     if let Some(timeout) = body.session_timeout {
-        if timeout < 30 || timeout > 86400 {
-            warn!(
-                "SessionTimeout {} is out of allowed range [30, 86400]",
-                timeout
-            );
+        let session_store = state
+            .session_store
+            .as_ref()
+            .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        if let Err(e) = session_store.set_timeout_seconds(timeout as i64) {
+            warn!("PATCH SessionService rejected: {}", e);
             return Err(StatusCode::BAD_REQUEST);
         }
-        // Note: updating the in-memory config would require a Mutex on AuthConfig.
-        // For now we acknowledge the request and return the current (unchanged) value.
-        // TODO: Make AuthConfig mutable so the timeout can be persisted.
-        info!("SessionTimeout update requested to {} seconds (not yet persisted)", timeout);
+
+        info!("SessionTimeout updated to {} seconds", timeout);
     }
 
-    // Return updated resource
     get_session_service(State(state)).await
 }
 

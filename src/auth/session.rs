@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicI64, Ordering};
 use uuid::Uuid;
 
 /// Session type
@@ -102,7 +103,10 @@ impl UserSession {
 #[derive(Debug, Clone)]
 pub struct SessionStore {
     sessions: Arc<RwLock<HashMap<String, UserSession>>>,
-    timeout_seconds: i64,
+    /// Current session timeout in seconds.  Wrapped in `Arc<AtomicI64>` so
+    /// that `PATCH /redfish/v1/SessionService` can update the value without
+    /// requiring a mutable reference to `AppState`.
+    timeout_seconds: Arc<AtomicI64>,
     max_sessions: usize,
 }
 
@@ -111,9 +115,27 @@ impl SessionStore {
     pub fn new(timeout_seconds: u64, max_sessions: usize) -> Self {
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
-            timeout_seconds: timeout_seconds as i64,
+            timeout_seconds: Arc::new(AtomicI64::new(timeout_seconds as i64)),
             max_sessions,
         }
+    }
+
+    /// Get the current session timeout in seconds.
+    pub fn timeout_seconds(&self) -> i64 {
+        self.timeout_seconds.load(Ordering::Relaxed)
+    }
+
+    /// Update the session timeout.  Valid range: 30–86400 seconds.
+    /// Returns `Err` if the value is out of range.
+    pub fn set_timeout_seconds(&self, seconds: i64) -> Result<(), String> {
+        if !(30..=86400).contains(&seconds) {
+            return Err(format!(
+                "SessionTimeout {} is out of the allowed range [30, 86400]",
+                seconds
+            ));
+        }
+        self.timeout_seconds.store(seconds, Ordering::Relaxed);
+        Ok(())
     }
 
     /// Generate a new user session
@@ -146,7 +168,7 @@ impl SessionStore {
         }
 
         // Create new session
-        let session = UserSession::new(username, client_ip, session_type, self.timeout_seconds);
+        let session = UserSession::new(username, client_ip, session_type, self.timeout_seconds());
         let session_id = session.id.clone();
         sessions.insert(session_id, session.clone());
 
@@ -162,7 +184,7 @@ impl SessionStore {
                 sessions.remove(session_id);
                 return None;
             }
-            session.touch(self.timeout_seconds);
+            session.touch(self.timeout_seconds());
             return Some(session.clone());
         }
         None
@@ -184,7 +206,7 @@ impl SessionStore {
                     sessions.remove(&id);
                     return None;
                 }
-                session.touch(self.timeout_seconds);
+                session.touch(self.timeout_seconds());
                 return Some(session.clone());
             }
         }

@@ -6,7 +6,7 @@
 //! - `/kvm/0`      — KVM / Remote Frame Buffer (planned)
 //! - `/vm/0/0`     — Virtual Media (planned)
 //! - `/nbd/0`      — NBD virtual media (planned)
-//! - `/redfish/events` — Server-Sent Events for Redfish EventService (planned)
+//! - `/redfish/events` — Server-Sent Events for Redfish EventService (see event_service.rs)
 //!
 //! ## Serial Console
 //!
@@ -23,13 +23,13 @@
 //!
 //! ## Status
 //!
-//! | Endpoint         | Status                |
-//! |------------------|-----------------------|
-//! | /console0        | ✅ Implemented        |
-//! | /kvm/0           | ⚠️  Stub (TODO)       |
-//! | /vm/0/0          | ❌ Not yet started    |
-//! | /nbd/0           | ❌ Not yet started    |
-//! | /redfish/events  | ⚠️  SSE Stub (TODO)   |
+//! | Endpoint         | Status                          |
+//! |------------------|---------------------------------|
+//! | /console0        | Implemented                     |
+//! | /kvm/0           | Stub — KVM proxying planned     |
+//! | /vm/0/0          | Not yet started                 |
+//! | /nbd/0           | Not yet started                 |
+//! | /redfish/events  | Implemented (SSE, event_service)|
 
 use axum::{
     extract::{
@@ -188,7 +188,7 @@ async fn handle_serial_console(mut ws: WebSocket, _state: Arc<AppState>) {
 /// The upstream bmcweb KVM implementation proxies the RFB (VNC) frame
 /// buffer protocol over a WebSocket, connecting to a kvmd UNIX socket.
 ///
-/// TODO: Implement full KVM proxying.  The frame buffer protocol requires:
+/// Full KVM proxying is planned.  The frame buffer protocol will require:
 ///   1. Connecting to the KVM UNIX socket or /dev/fb device
 ///   2. Negotiating RFB version and security type
 ///   3. Forwarding FramebufferUpdate and PointerEvent/KeyEvent messages

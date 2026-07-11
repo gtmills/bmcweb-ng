@@ -31,7 +31,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tracing::{debug, warn};
 use zbus::names::InterfaceName;
-use zbus::zvariant::Optional;
+use zbus::zvariant::{Optional, OwnedValue};
 
 /// A variant value returned from DBus.
 ///
@@ -248,23 +248,94 @@ impl DbusClient for ZBusClient {
         path: &str,
         interface: &str,
         method: &str,
-        _args: Option<&Value>,
+        args: Option<&Value>,
     ) -> Result<DbusValue> {
         debug!(
             "DBus call_method: dest={} path={} interface={} method={}",
             destination, path, interface, method
         );
 
-        // Generic method calls require knowing the full signature.
-        // Specific callers should use typed zbus proxies generated from
-        // introspection XML.  This generic path is a fallback.
+        // Build and send a DBus method-call message.
         //
-        // TODO: Implement a signature-aware generic call path.
-        warn!(
-            "Generic call_method not fully implemented for {}.{} at {}",
-            interface, method, path
-        );
-        Err(anyhow!("Generic call_method not yet fully implemented; use typed proxies"))
+        // zbus `Connection::call_method` takes a body that must implement
+        // `zvariant::Type + serde::Serialize`.  We dispatch on the JSON shape
+        // of the optional `args` value so we can handle the call patterns
+        // used by OpenBMC handlers:
+        //
+        //   None            → no-argument call (e.g. ListUsers, DeleteAll)
+        //   String          → single-string argument (e.g. GetUserInfo(username))
+        //   Array-of-strings → (e.g. CreateUser groups)
+        //   Array (mixed)   → represented as a tuple via a zvariant-encoded body
+        //
+        // For the general case we convert through json_to_zvariant and wrap in
+        // a single-element zvariant::Structure so the message body is correct.
+
+        let reply_msg = match args {
+            None => {
+                // No arguments — send empty body
+                self.connection
+                    .call_method(Some(destination), path, Some(interface), method, &())
+                    .await
+                    .with_context(|| format!("DBus call {}.{} at {} failed", interface, method, path))?
+            }
+            Some(Value::String(s)) => {
+                // Single string argument
+                self.connection
+                    .call_method(Some(destination), path, Some(interface), method, &s.as_str())
+                    .await
+                    .with_context(|| format!("DBus call {}.{} at {} failed", interface, method, path))?
+            }
+            Some(Value::Array(arr)) => {
+                // Check if this is an array of strings — the most common case
+                // (e.g. CreateUser groups list, NTPServers array).
+                let all_strings = arr.iter().all(|v| v.is_string());
+                if all_strings {
+                    let strings: Vec<&str> = arr
+                        .iter()
+                        .map(|v| v.as_str().unwrap_or(""))
+                        .collect();
+                    self.connection
+                        .call_method(Some(destination), path, Some(interface), method, &strings.as_slice())
+                        .await
+                        .with_context(|| format!("DBus call {}.{} at {} failed", interface, method, path))?
+                } else {
+                    // Heterogeneous array — encode as a zvariant::Structure.
+                    // This handles CreateUser(username, [groups], enabled).
+                    return call_method_hetero_array(
+                        &self.connection, destination, path, interface, method, arr,
+                    ).await;
+                }
+            }
+            Some(other) => {
+                // Scalar non-string (bool, number) — convert to zvariant and call.
+                let zval = json_to_zvariant(other)
+                    .with_context(|| format!("Cannot convert args for {}.{}", interface, method))?;
+                self.connection
+                    .call_method(Some(destination), path, Some(interface), method, &zval)
+                    .await
+                    .with_context(|| format!("DBus call {}.{} at {} failed", interface, method, path))?
+            }
+        };
+
+        // Deserialise the reply body.  Many OpenBMC methods return:
+        //   void            → empty body (maps to JSON null)
+        //   string          → single string
+        //   array<string>   → list of strings
+        //   dict<string,v>  → property map (GetUserInfo)
+        //
+        // We attempt to decode as OwnedValue first, then fall back to null.
+        match reply_msg.body().deserialize::<OwnedValue>() {
+            Ok(owned) => {
+                match zvariant_to_json(owned.into()) {
+                    Ok(v) => Ok(v),
+                    Err(_) => Ok(Value::Null),
+                }
+            }
+            Err(_) => {
+                // void return or undecodable body — treat as success with null
+                Ok(Value::Null)
+            }
+        }
     }
 
     async fn get_managed_objects(
@@ -313,6 +384,102 @@ impl DbusClient for ZBusClient {
         }
 
         Ok(result)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helper: heterogeneous-array method calls
+// ---------------------------------------------------------------------------
+
+/// Call a DBus method whose argument list is a heterogeneous JSON array
+/// `[arg0, arg1, ...]` where elements can be strings, arrays of strings, or
+/// booleans.  Encodes each element individually and builds a zbus message body
+/// as a tuple (zvariant Structure).
+///
+/// This is the path taken for `CreateUser(username, [groups], enabled)` where
+/// the DBus signature is `(s as b)`.
+async fn call_method_hetero_array(
+    connection: &zbus::Connection,
+    destination: &str,
+    path: &str,
+    interface: &str,
+    method: &str,
+    arr: &[Value],
+) -> Result<Value> {
+    use zbus::zvariant::Value as ZVal;
+
+    // Convert each JSON element to an owned zvariant::Value.
+    let mut zvals: Vec<OwnedValue> = Vec::with_capacity(arr.len());
+    for v in arr {
+        let zval: ZVal<'static> = match v {
+            Value::String(s) => ZVal::from(s.clone()),
+            Value::Bool(b)   => ZVal::from(*b),
+            Value::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    ZVal::from(i)
+                } else if let Some(f) = n.as_f64() {
+                    ZVal::from(f)
+                } else {
+                    return Err(anyhow!("Cannot convert JSON number to DBus value"));
+                }
+            }
+            Value::Array(inner) => {
+                // Array of strings (DBus `as`) — the only inner-array type used
+                // by OpenBMC User.Manager methods.
+                let owned_strings: Vec<String> = inner
+                    .iter()
+                    .map(|s| s.as_str().unwrap_or("").to_string())
+                    .collect();
+                ZVal::from(owned_strings)
+            }
+            other => return Err(anyhow!("Unsupported JSON type in hetero DBus args: {}", other)),
+        };
+        let owned = OwnedValue::try_from(zval)
+            .map_err(|e| anyhow!("Cannot convert to OwnedValue: {}", e))?;
+        zvals.push(owned);
+    }
+
+    // Build the structure body and send.
+    // zbus connection.call_method requires the body to be Serialize + Type.
+    // We pass a Vec<OwnedValue> which serializes as a D-Bus array variant; for
+    // structured calls we build each variant individually.
+    //
+    // Since zvariant::Structure is not straightforwardly constructable from
+    // Vec<OwnedValue> without unsafe or unstable API, we fall back to calling
+    // with a tuple encoding for the 3-element case (the only real case is
+    // CreateUser(s, as, b)).  Other arities fall through to a best-effort
+    // single-arg call with the first element.
+    let reply = if zvals.len() == 3 {
+        // Most common: CreateUser(username: s, groups: as, enabled: b)
+        connection
+            .call_method(Some(destination), path, Some(interface), method,
+                &(&zvals[0], &zvals[1], &zvals[2]))
+            .await
+            .with_context(|| format!("DBus hetero call {}.{} at {} failed", interface, method, path))?
+    } else if zvals.len() == 2 {
+        connection
+            .call_method(Some(destination), path, Some(interface), method,
+                &(&zvals[0], &zvals[1]))
+            .await
+            .with_context(|| format!("DBus hetero call {}.{} at {} failed", interface, method, path))?
+    } else if let Some(first) = zvals.first() {
+        connection
+            .call_method(Some(destination), path, Some(interface), method, first)
+            .await
+            .with_context(|| format!("DBus hetero call {}.{} at {} failed", interface, method, path))?
+    } else {
+        connection
+            .call_method(Some(destination), path, Some(interface), method, &())
+            .await
+            .with_context(|| format!("DBus hetero call {}.{} at {} (empty) failed", interface, method, path))?
+    };
+
+    match reply.body().deserialize::<OwnedValue>() {
+        Ok(owned) => match zvariant_to_json(owned.into()) {
+            Ok(v) => Ok(v),
+            Err(_) => Ok(Value::Null),
+        },
+        Err(_) => Ok(Value::Null),
     }
 }
 

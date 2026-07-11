@@ -85,7 +85,7 @@ bmcweb-ng/
 
 5. **HTTP/HTTPS Server** (`src/protocol/http.rs`)
    - Axum-based server with compression middleware and request tracing
-   - Health check endpoint
+   - Structured JSON health endpoint (`/health`) with per-component dbus/sessions/metrics status
    - TLS with rustls: loads PEM cert/key, self-signed generation stub
    - TLS accept loop with per-connection tokio::spawn
    - Auth middleware applied to Redfish routes
@@ -100,9 +100,9 @@ bmcweb-ng/
    - Managers sub-resources: NetworkProtocol, EthernetInterfaces, LogServices
 
 7. **Redfish API — Services**
-   - SessionService + Sessions (full login flow, PAM auth, X-Auth-Token)
+   - SessionService + Sessions (full login flow, PAM auth, X-Auth-Token); SessionTimeout persisted via AtomicI64
    - AccountService + Accounts + Roles (four built-in Redfish roles)
-   - EventService + Subscriptions + SubmitTestEvent action
+   - EventService + Subscriptions + SubmitTestEvent action; PATCH settings persisted
    - TaskService + Tasks collection
    - UpdateService + FirmwareInventory + SimpleUpdate action (202 + Location)
 
@@ -118,6 +118,7 @@ bmcweb-ng/
    - `DbusClient` trait: get/set property, get_all_properties, call_method, get_managed_objects
    - `ZBusClient`: production implementation using zbus fdo proxies
    - `ZBusClient::set_property()` fully implemented with `json_to_zvariant()` converter
+   - `ZBusClient::call_method()` fully implemented: dispatches on JSON arg shape (None/String/scalar/array); `call_method_hetero_array` helper for heterogeneous `(s as b)` signatures
    - `MockDbusClient`: in-memory mock for unit testing
    - `zvariant_to_json` and `json_to_zvariant` type conversion helpers
 
@@ -205,7 +206,6 @@ bmcweb-ng/
    - KVM (Remote Frame Buffer) full implementation
    - Virtual Media (`/vm/0/0`)
    - NBD virtual media (`/nbd/0`)
-   - Server-Sent Events for EventService
 
 4. **DBus REST API** (`/api/v1`)
    - Direct DBus object tree access (upstream feature)
@@ -239,7 +239,7 @@ bmcweb-ng/
 | Redfish Managers | ✅ | ✅ | GET+PATCH NIC; live FirmwareVersion/hostname/NTP; Reset via DBus |
 | SessionService | ✅ | ✅ | Full login flow, X-Auth-Token, role fetched from DBus |
 | AccountService | ✅ | ✅ | Full CRUD + PATCH lockout policy + PrivilegeMap |
-| EventService | ✅ | ✅ | Subscriptions + SubmitTestEvent + SSE stream + persisted PATCH settings |
+| EventService | ✅ | ✅ | Subscriptions + SubmitTestEvent + SSE stream + persisted PATCH settings + AtomicI64 timeout |
 | TaskService | ✅ | ✅ | Collection + instance management |
 | UpdateService | ✅ | ✅ | FirmwareInventory from DBus + SimpleUpdate |
 | CertificateService | ✅ | ✅ | GET + CertificateLocations |

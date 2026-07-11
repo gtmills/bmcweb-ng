@@ -10,8 +10,6 @@ pub use event::{EventService, EventSubscription, EventMessage, EventType, Protoc
 pub use task::{TaskService, Task, TaskState, TaskMessage};
 pub use update::{UpdateService, UpdateRequest, UpdateTarget, UpdateProtocol, FirmwareInventory};
 
-// TODO: Implement additional service modules:
-// - system.rs - System/Computer management
-// - chassis.rs - Chassis management
-// - manager.rs - Manager resources
-// - account.rs - Account management
+// System, chassis, manager, and account resources are handled directly in
+// the api::redfish handlers (systems.rs, chassis.rs, managers.rs, accounts.rs).
+// No separate service modules are required for those resources.

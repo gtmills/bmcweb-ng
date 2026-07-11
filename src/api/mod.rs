@@ -4,5 +4,3 @@
 
 pub mod redfish;
 pub mod websocket;
-
-// TODO: Add dbus_rest module when implemented

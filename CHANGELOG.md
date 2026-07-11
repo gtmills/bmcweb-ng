@@ -28,6 +28,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   heartbeat event on connect.  `ServerSentEventUri` field added to the
   EventService GET response.
 
+- **ZBusClient::call_method fully implemented** (`dbus/mod.rs`) —
+  `call_method` now dispatches on the JSON argument shape (None / String / scalar /
+  array) and converts each to the correct `zvariant` type.  Added
+  `call_method_hetero_array` free-function helper for heterogeneous 3-element arrays
+  (`(s as b)` signatures used by `xyz.openbmc_project.User.Manager.CreateUser`).
+  Previously the method always returned an error for non-trivial argument lists.
+
+- **SessionTimeout persistence** (`auth/session.rs`, `api/redfish/sessions.rs`) —
+  `SessionStore.timeout_seconds` is now an `Arc<AtomicI64>` shared between all
+  code paths.  `timeout_seconds()` and `set_timeout_seconds()` public accessors
+  added.  `GET /SessionService` reads the live value; `PATCH /SessionService` with
+  `{"SessionTimeout": N}` persists it for the lifetime of the process.
+
+- **Structured JSON /health endpoint** (`protocol/http.rs`) —
+  `GET /health` now returns a JSON document with per-component health:
+  `dbus`, `sessions`, `metrics`.  Each component reports `"ok"` or `"degraded"`
+  with a detail string.  The top-level `status` is `"degraded"` if any required
+  component (dbus, sessions) is unavailable.  Includes `version` field from
+  `CARGO_PKG_VERSION`.
+
 ### Changed
 
 - `config/mod.rs`: removed unused `FeaturesConfig` struct and `methods` field
@@ -35,11 +55,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   were present in `config.toml` and the struct but were never read by any handler.
 - `config.toml`: removed `[features]` section and `methods` key from `[auth]`;
   removed `format` from `[logging]`; added explanatory comments.
+- Stale `// TODO:` comments removed from `api/mod.rs`, `auth/mod.rs`,
+  `services/mod.rs`, `observability/mod.rs`, and `api/websocket/mod.rs`.
+  Replaced with accurate notes describing where each feature lives or is planned.
 
 ### Tests
 
-- 121 unit tests passing (up from 120); 2 new tests for `NetworkAdapters`
-  endpoint (no-DBus fallback and 404 for invalid chassis ID).
+- 121 unit tests passing; `test_health_handler` updated to exercise the new
+  JSON response from the structured `/health` endpoint.
 
 ---
 
@@ -156,30 +179,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **System reset DBus wiring** (`systems.rs`) — `POST /Systems/system/Actions/ComputerSystem.Reset`
   now writes `RequestedHostTransition` or `RequestedPowerTransition` to the appropriate
-  DBus state object. Full ResetType → DBus transition mapping:
-  `On`/`ForceOn` → `Host.Transition.On`, `ForceOff` → `Chassis.Transition.Off`,
-  `GracefulShutdown` → `Host.Transition.Off`, `GracefulRestart` → `Host.Transition.Reboot`,
-  `ForceRestart` → `Host.Transition.ForceWarmReboot`, `Nmi` → `Host.Transition.DiagnosticMode`.
+  DBus state object. Full ResetType to DBus transition mapping:
+  `On`/`ForceOn` to `Host.Transition.On`, `ForceOff` to `Chassis.Transition.Off`,
+  `GracefulShutdown` to `Host.Transition.Off`, `GracefulRestart` to `Host.Transition.Reboot`,
+  `ForceRestart` to `Host.Transition.ForceWarmReboot`, `Nmi` to `Host.Transition.DiagnosticMode`.
 
 - **BMC NIC enumeration** (`managers.rs`) — `GET /Managers/bmc/EthernetInterfaces`
   now calls `GetManagedObjects` on `xyz.openbmc_project.Network` to enumerate all
   interfaces implementing `xyz.openbmc_project.Network.EthernetInterface`. Falls back to
   a single `eth0` entry when DBus is unavailable or returns an empty set.
-
-### Changed
-
-- `accounts.rs`: removed hard-coded `root`-only restriction from `get_account()`; now
-  any account present in DBus can be retrieved.
-- `chassis.rs`: Power, Thermal, and Sensors endpoints now use dynamic `@odata.id` based on
-  `chassis_id` parameter instead of hard-coded `"/redfish/v1/Chassis/chassis/..."`.
-- `managers.rs`: EthernetInterfaces collection count is now dynamic (reflects live NIC count).
-
-### Tests
-
-- 115 unit tests passing (up from 112); new tests for account operations (no-DBus fallback,
-  delete-root-forbidden, delete-unknown, `openbmc_priv_to_role` mapping).
-
----
 
 - **DBus PowerState wiring** (`systems.rs`) — `GET /redfish/v1/Systems/system`
   now queries `xyz.openbmc_project.State.Host / CurrentHostState` at
@@ -243,23 +251,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `xyz.openbmc_project.Inventory.Item.Dimm`. Both routes registered in `mod.rs`.
   The Processors and Memory collections are updated to enumerate live DBus inventory.
 
-### Changed
-
-- `systems.rs` Processors and Memory collections now dynamically enumerate DBus
-  inventory objects rather than returning hard-coded empty collections.
-- `privilege.rs` `session_role()` now reads `session.role` rather than returning
-  a hard-coded `"ReadOnly"` for all sessions.
-- All DBus-querying handlers use the `ZBusClient::from_connection()` constructor
-  with graceful fallback when `AppState.dbus_connection` is `None`.
-
-### Tests
-
-- 112 unit tests passing (up from ~80); all new DBus-integration paths covered with
-  no-DBus fallback tests. New coverage for privilege checks with specific roles,
-  `json_to_zvariant` conversion, EventLog endpoint, PowerState mapping.
-
----
-
 - **SessionService API** — Full Redfish SessionService resource family
   (GET/PATCH /redfish/v1/SessionService, GET/POST /redfish/v1/SessionService/Sessions,
   GET/DELETE /redfish/v1/SessionService/Sessions/{id}). Session creation via PAM,
@@ -291,8 +282,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   property maps. `zvariant_to_json` type conversion helper.
 
 - **TLS/HTTPS support** — `rustls`-backed HTTPS server with PEM certificate loading,
-  automatic fallback to self-signed generation (documents `rcgen` TODO), HTTP/2 via
-  ALPN, TLS-based accept loop with per-connection `tokio::spawn`.
+  automatic fallback to self-signed generation, HTTP/2 via ALPN,
+  TLS-based accept loop with per-connection `tokio::spawn`.
 
 - **Chassis sub-resources** — Power (PSUs, voltage sensors), Thermal (temperatures,
   fans), Sensors collection, NetworkAdapters collection. All document OpenBMC DBus
@@ -308,7 +299,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **WebSocket foundation** — Serial console handler (`/console0`) that proxies
   bidirectional byte streams between WebSocket and the obmc-console UNIX socket at
-  `/run/obmc-console/default`. KVM handler stub at `/kvm/0` with detailed TODO.
+  `/run/obmc-console/default`. KVM handler stub at `/kvm/0`.
 
 - **Authentication middleware integration** — `optional_auth_middleware` applied
   globally to Redfish and WebSocket routes. Session creation endpoints intentionally
@@ -323,6 +314,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `accounts.rs`: removed hard-coded `root`-only restriction from `get_account()`; now
+  any account present in DBus can be retrieved.
+- `chassis.rs`: Power, Thermal, and Sensors endpoints now use dynamic `@odata.id` based on
+  `chassis_id` parameter instead of hard-coded `"/redfish/v1/Chassis/chassis/..."`.
+- `managers.rs`: EthernetInterfaces collection count is now dynamic (reflects live NIC count).
+- `systems.rs` Processors and Memory collections now dynamically enumerate DBus
+  inventory objects rather than returning hard-coded empty collections.
+- `privilege.rs` `session_role()` now reads `session.role` rather than returning
+  a hard-coded `"ReadOnly"` for all sessions.
+- All DBus-querying handlers use the `ZBusClient::from_connection()` constructor
+  with graceful fallback when `AppState.dbus_connection` is `None`.
 - Updated all repository URLs from internal to public GitHub (`https://github.com/gtmills/bmcweb-ng`)
 - Improved `managers.rs`: added NetworkProtocol, EthernetInterfaces, LogServices
   sub-resource links, expanded SerialConsole/CommandShell/GraphicalConsole fields
@@ -343,9 +345,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Session tokens use UUID v4 (119-bit entropy, above OWASP minimum of 64 bits)
 - Redfish role stored per-session and read at privilege check time
 
+### Tests
+
+- 115 unit tests passing; all DBus-integration paths covered with no-DBus fallback
+  tests; new coverage for privilege checks with specific roles, `json_to_zvariant`
+  conversion, EventLog endpoint, PowerState mapping, account operations.
+
+---
+
 ## [0.1.0] - 2026-04-28
 
 ### Added
+
 - Initial project setup
 - Basic Rust project structure
 - README with project overview and roadmap

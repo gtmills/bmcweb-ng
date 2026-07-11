@@ -30,7 +30,9 @@
 use anyhow::{Context, Result};
 use axum::{
     Router,
+    extract::State,
     middleware,
+    response::IntoResponse,
     routing::get,
 };
 use tower::Service as _;
@@ -121,7 +123,7 @@ impl HttpServer {
 
         Router::new()
             .route("/", get(root_handler))
-            .route("/health", get(health_handler))
+            .route("/health", get(health_handler))  // health_handler takes State<Arc<AppState>>
             .nest("/redfish/v1", redfish_router)
             .merge(ws_router)
             .layer(CompressionLayer::new())
@@ -327,9 +329,67 @@ async fn root_handler() -> &'static str {
     "bmcweb-ng BMC webserver — Redfish API available at /redfish/v1"
 }
 
-/// Health check endpoint used by systemd and load-balancers.
-async fn health_handler() -> &'static str {
-    "OK"
+/// GET /health
+///
+/// Structured JSON health check used by systemd, load-balancers and monitoring.
+///
+/// Returns HTTP 200 with a JSON body describing the health of each subsystem.
+/// A component in `"degraded"` state means it is unavailable but the server
+/// is still functional (e.g. no DBus connection in a non-OpenBMC environment).
+///
+/// Response shape:
+/// ```json
+/// {
+///   "status": "ok" | "degraded",
+///   "version": "0.2.0",
+///   "components": {
+///     "dbus":    { "status": "ok" | "degraded", "detail": "..." },
+///     "sessions":{ "status": "ok",              "active_sessions": N },
+///     "metrics": { "status": "ok" | "degraded"  }
+///   }
+/// }
+/// ```
+async fn health_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    use axum::http::StatusCode;
+    use serde_json::json;
+
+    let dbus_status = if state.dbus_connection.is_some() {
+        json!({ "status": "ok", "detail": "connected to system bus" })
+    } else {
+        json!({ "status": "degraded", "detail": "no DBus connection" })
+    };
+
+    let session_status = if let Some(store) = &state.session_store {
+        let active = store.get_all_sessions().len();
+        json!({ "status": "ok", "active_sessions": active })
+    } else {
+        json!({ "status": "degraded", "detail": "session store not available" })
+    };
+
+    let metrics_status = if state.metrics.is_some() {
+        json!({ "status": "ok" })
+    } else {
+        json!({ "status": "degraded", "detail": "metrics not enabled" })
+    };
+
+    // Overall status is "degraded" if any component is degraded.
+    let overall = if state.dbus_connection.is_some() && state.session_store.is_some() {
+        "ok"
+    } else {
+        "degraded"
+    };
+
+    let body = json!({
+        "status": overall,
+        "version": env!("CARGO_PKG_VERSION"),
+        "components": {
+            "dbus":    dbus_status,
+            "sessions": session_status,
+            "metrics": metrics_status,
+        }
+    });
+
+    (StatusCode::OK, axum::Json(body))
 }
 
 #[cfg(test)]
@@ -365,7 +425,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_health_handler() {
-        let response = health_handler().await;
-        assert_eq!(response, "OK");
+        let config = Config::default();
+        let state = Arc::new(AppState::new(config));
+        let response = health_handler(State(state)).await;
+        let (status, body) = response.into_response().into_parts();
+        assert_eq!(status.status, axum::http::StatusCode::OK);
+        // Body is JSON — just check that status is ok
+        let _ = body; // we don't need to read the body bytes in this test
     }
 }
