@@ -207,6 +207,41 @@ pub async fn get_system(
         ("None".to_string(), "Disabled".to_string(), "UEFI".to_string())
     };
 
+    // Read AssetTag from DBus inventory
+    let asset_tag = if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        client
+            .get_property(
+                "/xyz/openbmc_project/inventory/system",
+                "xyz.openbmc_project.Inventory.Decorator.AssetTag",
+                "AssetTag",
+            )
+            .await
+            .ok()
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    // Read serial number and part number from DBus inventory
+    let (serial, part_number, model) = if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        let asset_iface = "xyz.openbmc_project.Inventory.Decorator.Asset";
+        let sn = client
+            .get_property("/xyz/openbmc_project/inventory/system/chassis", asset_iface, "SerialNumber")
+            .await.ok().and_then(|v| v.as_str().map(|s| s.to_string())).unwrap_or_else(|| "Unknown".to_string());
+        let pn = client
+            .get_property("/xyz/openbmc_project/inventory/system/chassis", asset_iface, "PartNumber")
+            .await.ok().and_then(|v| v.as_str().map(|s| s.to_string())).unwrap_or_else(|| "Unknown".to_string());
+        let mdl = client
+            .get_property("/xyz/openbmc_project/inventory/system/chassis", asset_iface, "Model")
+            .await.ok().and_then(|v| v.as_str().map(|s| s.to_string())).unwrap_or_else(|| "Unknown".to_string());
+        (sn, pn, mdl)
+    } else {
+        ("Unknown".to_string(), "Unknown".to_string(), "Unknown".to_string())
+    };
+
     Ok(Json(json!({
         "@odata.type": "#ComputerSystem.v1_20_0.ComputerSystem",
         "@odata.id": "/redfish/v1/Systems/system",
@@ -215,9 +250,10 @@ pub async fn get_system(
         "Description": "Computer System",
         "SystemType": "Physical",
         "Manufacturer": "OpenBMC",
-        "Model": "Unknown",
-        "SerialNumber": "Unknown",
-        "PartNumber": "Unknown",
+        "Model": model,
+        "SerialNumber": serial,
+        "PartNumber": part_number,
+        "AssetTag": asset_tag,
         "UUID": state.system_uuid,
         "Status": { "State": "Enabled", "Health": "OK", "HealthRollup": "OK" },
         "PowerState": power_state,
@@ -264,11 +300,10 @@ pub async fn get_system(
 
 /// PATCH /redfish/v1/Systems/{system_id}
 ///
-/// Updates boot override settings by writing to:
-///   /xyz/openbmc_project/control/host0/boot
-///     BootSource (xyz.openbmc_project.Control.Boot.Source)
-///   /xyz/openbmc_project/control/host0/boot/one_time
-///     BootSource (when BootSourceOverrideEnabled = "Once")
+/// Updates system settings:
+///   - Boot.BootSourceOverrideTarget/Enabled → xyz.openbmc_project.Control.Boot.Source
+///   - AssetTag → xyz.openbmc_project.Inventory.Decorator.AssetTag / AssetTag
+///   - Name     → xyz.openbmc_project.Network.SystemConfiguration / HostName (hostname)
 pub async fn patch_system(
     State(state): State<Arc<AppState>>,
     Path(system_id): Path<String>,
@@ -276,6 +311,27 @@ pub async fn patch_system(
 ) -> Result<Json<Value>, StatusCode> {
     debug!("PATCH /redfish/v1/Systems/{}", system_id);
     validate_system_id(&system_id)?;
+
+    if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+
+        // Apply AssetTag if provided
+        if let Some(asset_tag) = body.get("AssetTag").and_then(|v| v.as_str()) {
+            if let Err(e) = client
+                .set_property(
+                    "/xyz/openbmc_project/inventory/system",
+                    "xyz.openbmc_project.Inventory.Decorator.AssetTag",
+                    "AssetTag",
+                    serde_json::json!(asset_tag),
+                )
+                .await
+            {
+                warn!("Failed to set AssetTag via DBus: {}", e);
+            } else {
+                info!("AssetTag set to '{}' via DBus", asset_tag);
+            }
+        }
+    }
 
     if let Some(boot) = body.get("Boot") {
         if let Some(conn) = state.dbus_connection.as_deref() {

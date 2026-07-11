@@ -146,35 +146,130 @@ pub async fn get_update_service(
     Ok(Json(response))
 }
 
+/// Helper: enumerate software version objects from DBus.
+///
+/// On OpenBMC, software images are at:
+///   /xyz/openbmc_project/software/<id>
+///   interface: xyz.openbmc_project.Software.Version
+///   properties: Version (string), Purpose (enum)
+///
+/// Purpose enum:
+///   .BMC     → BMC firmware
+///   .Host    → Host/BIOS firmware
+///   .System  → System firmware
+///   .Other   → Other
+async fn dbus_firmware_members(conn: &zbus::Connection) -> Vec<Value> {
+    use crate::dbus::{DbusClient, ZBusClient};
+    let client = ZBusClient::from_connection(conn.clone());
+    let sw_iface = "xyz.openbmc_project.Software.Version";
+    let act_iface = "xyz.openbmc_project.Software.Activation";
+
+    match client
+        .get_managed_objects(
+            "xyz.openbmc_project.Software.BMC.Updater",
+            "/xyz/openbmc_project/software",
+        )
+        .await
+    {
+        Ok(objects) => {
+            objects
+                .iter()
+                .filter(|(path, ifaces)| {
+                    ifaces.contains_key(sw_iface)
+                        && path.starts_with("/xyz/openbmc_project/software/")
+                        && path.as_str() != "/xyz/openbmc_project/software"
+                })
+                .filter_map(|(path, ifaces)| {
+                    let id = path.rsplit('/').next()?;
+                    let sw_props = &ifaces[sw_iface];
+                    let version = sw_props
+                        .get("Version")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Unknown")
+                        .to_string();
+                    let purpose_raw = sw_props
+                        .get("Purpose")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let name = if purpose_raw.ends_with(".BMC") {
+                        "BMC Firmware"
+                    } else if purpose_raw.ends_with(".Host") {
+                        "Host Firmware"
+                    } else if purpose_raw.ends_with(".System") {
+                        "System Firmware"
+                    } else {
+                        "Firmware"
+                    };
+                    let is_active = ifaces
+                        .get(act_iface)
+                        .and_then(|ap| ap.get("Activation"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.ends_with(".Active"))
+                        .unwrap_or(false);
+                    Some(json!({
+                        "@odata.id": format!("/redfish/v1/UpdateService/FirmwareInventory/{}", id),
+                        "Id": id,
+                        "Name": name,
+                        "Version": version,
+                        "Updateable": true,
+                        "Status": {
+                            "State": if is_active { "Enabled" } else { "StandbyOffline" },
+                            "Health": "OK"
+                        }
+                    }))
+                })
+                .collect()
+        }
+        Err(e) => {
+            warn!("Failed to enumerate firmware from DBus: {}", e);
+            vec![]
+        }
+    }
+}
+
 /// GET /redfish/v1/UpdateService/FirmwareInventory
+///
+/// Returns firmware inventory from both the in-memory update service and
+/// live DBus software objects at /xyz/openbmc_project/software.
 pub async fn get_firmware_inventory_collection(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Value>, StatusCode> {
     debug!("GET /redfish/v1/UpdateService/FirmwareInventory");
 
-    let update_service = state
-        .update_service
-        .as_ref()
-        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    // Always include in-memory firmware (from upload operations)
+    let mut members: Vec<Value> = if let Some(update_service) = state.update_service.as_ref() {
+        update_service
+            .get_all_firmware()
+            .iter()
+            .map(|f| json!({ "@odata.id": format!("/redfish/v1/UpdateService/FirmwareInventory/{}", f.id) }))
+            .collect()
+    } else {
+        vec![]
+    };
 
-    let firmware = update_service.get_all_firmware();
-    let members: Vec<Value> = firmware
-        .iter()
-        .map(|f| {
-            json!({ "@odata.id": format!("/redfish/v1/UpdateService/FirmwareInventory/{}", f.id) })
-        })
-        .collect();
+    // Add DBus software version objects (deduplicated by @odata.id)
+    if let Some(conn) = state.dbus_connection.as_deref() {
+        let dbus_items = dbus_firmware_members(conn).await;
+        let existing_ids: std::collections::HashSet<String> = members
+            .iter()
+            .filter_map(|v| v.get("@odata.id").and_then(|u| u.as_str()).map(|s| s.to_string()))
+            .collect();
+        for item in dbus_items {
+            let oid = item.get("@odata.id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if !existing_ids.contains(&oid) {
+                members.push(json!({ "@odata.id": oid }));
+            }
+        }
+    }
+
     let count = members.len();
-
-    let response = json!({
+    Ok(Json(json!({
         "@odata.type": "#SoftwareInventoryCollection.SoftwareInventoryCollection",
         "@odata.id": "/redfish/v1/UpdateService/FirmwareInventory",
         "Name": "Firmware Inventory Collection",
         "Members@odata.count": count,
         "Members": members,
-    });
-
-    Ok(Json(response))
+    })))
 }
 
 /// GET /redfish/v1/UpdateService/FirmwareInventory/{firmware_id}
