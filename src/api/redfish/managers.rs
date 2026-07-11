@@ -27,6 +27,7 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
+use crate::dbus::{DbusClient, ZBusClient};
 use crate::AppState;
 
 // ---------------------------------------------------------------------------
@@ -69,8 +70,31 @@ pub async fn get_manager(
     debug!("GET /redfish/v1/Managers/{}", manager_id);
     validate_manager_id(&manager_id)?;
 
-    // TODO: Query FirmwareVersion from DBus:
-    //   xyz.openbmc_project.Software.Version / Version on the active BMC image
+    // Query FirmwareVersion from DBus: xyz.openbmc_project.Software.Version on the
+    // active BMC image object at /xyz/openbmc_project/software/active
+    let firmware_version = if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        match client
+            .get_property(
+                "/xyz/openbmc_project/software/active",
+                "xyz.openbmc_project.Software.Version",
+                "Version",
+            )
+            .await
+        {
+            Ok(v) => v
+                .as_str()
+                .unwrap_or("Unknown")
+                .to_string(),
+            Err(e) => {
+                warn!("Failed to read BMC FirmwareVersion from DBus: {}", e);
+                "Unknown".to_string()
+            }
+        }
+    } else {
+        "Unknown".to_string()
+    };
+
     Ok(Json(json!({
         "@odata.type": "#Manager.v1_19_0.Manager",
         "@odata.id": "/redfish/v1/Managers/bmc",
@@ -80,7 +104,7 @@ pub async fn get_manager(
         "ManagerType": "BMC",
         "UUID": state.system_uuid,
         "Model": "OpenBMC",
-        "FirmwareVersion": "Unknown",
+        "FirmwareVersion": firmware_version,
         "Status": { "State": "Enabled", "Health": "OK" },
         "PowerState": "On",
         "DateTime": chrono::Utc::now().to_rfc3339(),
@@ -165,15 +189,47 @@ pub async fn reset_manager(
 ///
 /// Returns network service configuration (SSH, HTTPS, NTP, etc.)
 ///
-/// OpenBMC source: xyz.openbmc_project.Network.SystemConfiguration
+/// OpenBMC source: xyz.openbmc_project.Network.SystemConfiguration at
+///   /xyz/openbmc_project/network/config
 pub async fn get_network_protocol(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Path(manager_id): Path<String>,
 ) -> Result<Json<Value>, StatusCode> {
     debug!("GET /redfish/v1/Managers/{}/NetworkProtocol", manager_id);
     validate_manager_id(&manager_id)?;
 
-    // TODO: Query NTP servers and hostname from DBus
+    // Query hostname and NTP server list from DBus
+    let (hostname, ntp_servers) = if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+
+        let hostname = client
+            .get_property(
+                "/xyz/openbmc_project/network/config",
+                "xyz.openbmc_project.Network.SystemConfiguration",
+                "HostName",
+            )
+            .await
+            .ok()
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| "openbmc".to_string());
+
+        let ntp_servers: Vec<Value> = client
+            .get_property(
+                "/xyz/openbmc_project/network/config",
+                "xyz.openbmc_project.Network.SystemConfiguration",
+                "NTPServers",
+            )
+            .await
+            .ok()
+            .and_then(|v| v.as_array().cloned())
+            .unwrap_or_default();
+
+        (hostname, ntp_servers)
+    } else {
+        ("openbmc".to_string(), vec![])
+    };
+
+    let fqdn = hostname.clone();
     Ok(Json(json!({
         "@odata.type": "#ManagerNetworkProtocol.v1_9_0.ManagerNetworkProtocol",
         "@odata.id": "/redfish/v1/Managers/bmc/NetworkProtocol",
@@ -181,8 +237,8 @@ pub async fn get_network_protocol(
         "Name": "Manager Network Protocol",
         "Description": "Manager Network Service",
         "Status": { "State": "Enabled", "Health": "OK" },
-        "HostName": "openbmc",
-        "FQDN": "openbmc",
+        "HostName": hostname,
+        "FQDN": fqdn,
         "HTTP": { "ProtocolEnabled": false, "Port": 80 },
         "HTTPS": { "ProtocolEnabled": true, "Port": 443 },
         "SSH": { "ProtocolEnabled": true, "Port": 22 },
@@ -190,7 +246,7 @@ pub async fn get_network_protocol(
         "NTP": {
             "ProtocolEnabled": true,
             "Port": 123,
-            "NTPServers": [],
+            "NTPServers": ntp_servers,
             "NetworkSuppliedServers": []
         },
         "SNMP": { "ProtocolEnabled": false, "Port": 161 }
@@ -248,7 +304,7 @@ pub async fn get_manager_ethernet_interfaces(
 /// `/xyz/openbmc_project/network/<id>` with interface
 /// `xyz.openbmc_project.Network.EthernetInterface`.
 pub async fn get_manager_ethernet_interface(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Path((manager_id, nic_id)): Path<(String, String)>,
 ) -> Result<Json<Value>, StatusCode> {
     debug!(
@@ -262,23 +318,73 @@ pub async fn get_manager_ethernet_interface(
         return Err(StatusCode::NOT_FOUND);
     }
 
-    // TODO: Query interface properties from DBus
+    // Query MAC address and IP configuration from DBus
+    let dbus_path = format!("/xyz/openbmc_project/network/{}", nic_id);
+    let net_iface = "xyz.openbmc_project.Network.EthernetInterface";
+
+    let (mac_address, ipv4_addresses, ipv6_addresses, hostname) =
+        if let Some(conn) = state.dbus_connection.as_deref() {
+            let client = ZBusClient::from_connection(conn.clone());
+
+            let mac = client
+                .get_property(&dbus_path, net_iface, "MACAddress")
+                .await
+                .ok()
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| "00:00:00:00:00:00".to_string());
+
+            let ipv4 = client
+                .get_property(&dbus_path, net_iface, "IPv4Addresses")
+                .await
+                .ok()
+                .and_then(|v| v.as_array().cloned())
+                .unwrap_or_default();
+
+            let ipv6 = client
+                .get_property(&dbus_path, net_iface, "IPv6Addresses")
+                .await
+                .ok()
+                .and_then(|v| v.as_array().cloned())
+                .unwrap_or_default();
+
+            let hn = client
+                .get_property(
+                    "/xyz/openbmc_project/network/config",
+                    "xyz.openbmc_project.Network.SystemConfiguration",
+                    "HostName",
+                )
+                .await
+                .ok()
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| "openbmc".to_string());
+
+            (mac, ipv4, ipv6, hn)
+        } else {
+            (
+                "00:00:00:00:00:00".to_string(),
+                vec![],
+                vec![],
+                "openbmc".to_string(),
+            )
+        };
+
+    let fqdn = hostname.clone();
     Ok(Json(json!({
         "@odata.type": "#EthernetInterface.v1_9_0.EthernetInterface",
-        "@odata.id": "/redfish/v1/Managers/bmc/EthernetInterfaces/eth0",
-        "Id": "eth0",
-        "Name": "eth0",
+        "@odata.id": format!("/redfish/v1/Managers/bmc/EthernetInterfaces/{}", nic_id),
+        "Id": nic_id,
+        "Name": nic_id,
         "Description": "Management Ethernet Interface",
         "InterfaceEnabled": true,
-        "MACAddress": "00:00:00:00:00:00",
+        "MACAddress": mac_address,
         "SpeedMbps": 1000,
         "AutoNeg": true,
         "FullDuplex": true,
         "MTUSize": 1500,
-        "HostName": "openbmc",
-        "FQDN": "openbmc",
-        "IPv4Addresses": [],
-        "IPv6Addresses": [],
+        "HostName": hostname,
+        "FQDN": fqdn,
+        "IPv4Addresses": ipv4_addresses,
+        "IPv6Addresses": ipv6_addresses,
         "IPv4StaticAddresses": [],
         "IPv6StaticAddresses": [],
         "NameServers": [],

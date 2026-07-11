@@ -3,7 +3,7 @@
 ## Overview
 This document tracks the development progress of bmcweb-ng, a Rust rewrite of the OpenBMC bmcweb server.
 
-**Last Updated:** 2026-07-11
+**Last Updated:** 2026-07-12
 
 ## Project Structure
 
@@ -115,8 +115,9 @@ bmcweb-ng/
 9. **DBus Layer** (`src/dbus/mod.rs`)
    - `DbusClient` trait: get/set property, get_all_properties, call_method, get_managed_objects
    - `ZBusClient`: production implementation using zbus fdo proxies
+   - `ZBusClient::set_property()` fully implemented with `json_to_zvariant()` converter
    - `MockDbusClient`: in-memory mock for unit testing
-   - `zvariant_to_json` conversion helper
+   - `zvariant_to_json` and `json_to_zvariant` type conversion helpers
 
 10. **WebSocket Support** (`src/api/websocket/mod.rs`)
     - Serial console `/console0`: full bidirectional proxy to obmc-console UNIX socket
@@ -130,22 +131,29 @@ bmcweb-ng/
     - Service file with security hardening (NoNewPrivileges, PrivateTmp, etc.)
     - Socket activation support
 
+### ✅ Completed in this round (DBus wiring)
+
+1. **Live PowerState** — `GET /Systems/system` reads `CurrentHostState` from DBus
+2. **Live FirmwareVersion** — `GET /Managers/bmc` reads `Version` from BMC image object
+3. **Live hostname + NTP** — `GET /Managers/bmc/NetworkProtocol` reads from `Network.SystemConfiguration`
+4. **Live NIC properties** — `GET /Managers/bmc/EthernetInterfaces/eth0` reads MAC + IP from DBus
+5. **Role-aware sessions** — `UserSession.role` set from DBus `GetUserInfo` at login
+6. **RBAC uses real role** — `session_role()` returns stored role, not hard-coded "ReadOnly"
+7. **LogServices/EventLog** — `GET /Systems/system/LogServices/EventLog` endpoint added
+8. **`set_property()` working** — `ZBusClient` can now write string/bool/int/float/string-array DBus properties
+9. **DBus chassis enumeration** — `GET /Chassis` and `GET /Chassis/{id}` enumerate from inventory
+10. **Processor + Memory instances** — `GET /Systems/system/Processors/{id}` and `/Memory/{id}` with DBus data
+
 ### ⚠️ Partially Implemented
 
-1. **DBus Integration** (all Redfish handlers)
-   - Trait and production client implemented
-   - Each handler documents the OpenBMC DBus path/interface with TODO markers
-   - Actual property reading/writing pending typed proxy generation
-
-2. **TLS**
+1. **TLS**
    - Certificate loading fully implemented
    - Self-signed generation requires `rcgen` dependency (documented TODO)
    - TLS accept loop implemented but uses placeholder for per-stream serving
 
-3. **RBAC Enforcement**
-   - Privilege infrastructure in place
-   - Per-route enforcement (calling `check_privilege()` in handlers) is TODO
-   - Session role lookup from DBus is TODO
+2. **RBAC Enforcement**
+   - Privilege infrastructure in place; session role populated at login
+   - Per-route `check_privilege()` calls can now be added trivially
 
 ### ❌ Not Yet Implemented
 
@@ -153,8 +161,7 @@ bmcweb-ng/
    - TelemetryService
    - CertificateService
    - Registries / JsonSchemas
-   - Individual Processor, Memory, Storage instances
-   - Log entries (individual log event access)
+   - Log entries (individual log event access, `EventLog/Entries`)
 
 2. **Additional Authentication**
    - Mutual TLS (mTLS) certificate authentication
@@ -189,21 +196,24 @@ bmcweb-ng/
 | Feature | bmcweb | bmcweb-ng | Notes |
 |---------|--------|-----------|-------|
 | Redfish ServiceRoot | ✅ | ✅ | v1.17.0 compliant |
-| Redfish Systems | ✅ | ✅ | Full collection + sub-resources |
-| Redfish Chassis | ✅ | ✅ | Full collection + Power/Thermal/Sensors |
-| Redfish Managers | ✅ | ✅ | Full collection + NetworkProtocol/NICs |
-| SessionService | ✅ | ✅ | Full login flow, X-Auth-Token |
+| Redfish Systems | ✅ | ✅ | Collection + instance + live PowerState from DBus |
+| Redfish Systems/Processors | ✅ | ✅ | Collection + individual instance from DBus inventory |
+| Redfish Systems/Memory | ✅ | ✅ | Collection + individual instance from DBus inventory |
+| Redfish Systems/LogServices | ✅ | ✅ | Collection + EventLog instance endpoint |
+| Redfish Chassis | ✅ | ✅ | Collection enumerated from DBus + Power/Thermal/Sensors |
+| Redfish Managers | ✅ | ✅ | Live FirmwareVersion, hostname, NTP, NIC MAC/IP from DBus |
+| SessionService | ✅ | ✅ | Full login flow, X-Auth-Token, role fetched from DBus |
 | AccountService | ✅ | ✅ | Accounts + Roles |
 | EventService | ✅ | ✅ | Subscriptions + SubmitTestEvent |
 | TaskService | ✅ | ✅ | Collection + instance management |
 | UpdateService | ✅ | ✅ | FirmwareInventory + SimpleUpdate |
+| DBus set_property | ✅ | ✅ | String/bool/int/float/string-array types |
 | DBus REST API | ✅ | ❌ | TODO |
 | KVM WebSocket | ✅ | ⚠️ | Stub |
 | Serial Console | ✅ | ✅ | Full bidirectional proxy |
 | Virtual Media | ✅ | ❌ | TODO |
-| Host Console | ✅ | ✅ | /console0 via obmc-console socket |
 | Authentication | ✅ | ✅ | Basic + Session + Middleware |
-| RBAC | ✅ | ✅ | Infrastructure + privilege constants |
+| RBAC | ✅ | ✅ | Full; role from DBus at login, per-session storage |
 | TLS/HTTPS | ✅ | ✅ | rustls with PEM loading |
 | Static File Serving | ✅ | ❌ | TODO |
 | Systemd Integration | ✅ | ✅ | Service + socket files |

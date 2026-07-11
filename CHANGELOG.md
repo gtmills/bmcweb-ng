@@ -9,6 +9,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **DBus PowerState wiring** (`systems.rs`) — `GET /redfish/v1/Systems/system`
+  now queries `xyz.openbmc_project.State.Host / CurrentHostState` at
+  `/xyz/openbmc_project/state/host0`. Maps `HostState.Running`, `Quiesced`, and
+  `DiagnosticMode` to `"On"`; `HostState.Off` to `"Off"`; unknown states to
+  `"Unknown"`. Gracefully falls back to `"Unknown"` when DBus is unavailable.
+
+- **DBus FirmwareVersion wiring** (`managers.rs`) — `GET /redfish/v1/Managers/bmc`
+  now queries `xyz.openbmc_project.Software.Version / Version` on the active BMC
+  image object at `/xyz/openbmc_project/software/active`. Falls back to `"Unknown"`.
+
+- **DBus hostname + NTP wiring** (`managers.rs`) — `GET /redfish/v1/Managers/bmc/NetworkProtocol`
+  now queries `xyz.openbmc_project.Network.SystemConfiguration / HostName` and
+  `NTPServers` from `/xyz/openbmc_project/network/config`. `HostName` and `FQDN`
+  fields reflect the live hostname; `NTP.NTPServers` contains the current NTP list.
+
+- **DBus MAC/IP wiring** (`managers.rs`) — `GET /redfish/v1/Managers/bmc/EthernetInterfaces/eth0`
+  now queries `xyz.openbmc_project.Network.EthernetInterface / MACAddress`,
+  `IPv4Addresses`, and `IPv6Addresses` from `/xyz/openbmc_project/network/eth0`.
+  Falls back to `00:00:00:00:00:00` / empty lists when DBus is unavailable.
+
+- **Role-based session support** (`auth/session.rs`, `auth/privilege.rs`) — `UserSession`
+  now carries a `role: String` field (default `"ReadOnly"`), set at session-creation
+  time via `set_role()`. `session_role()` in `privilege.rs` reads the stored role
+  instead of hard-coding `"ReadOnly"`. `SessionStore::set_session_role()` allows
+  updating the persisted role in-store after creation. New tests confirm Administrator
+  can configure, ReadOnly cannot, and that the stored role is correctly used.
+
+- **DBus role lookup on login** (`sessions.rs`) — `POST /redfish/v1/SessionService/Sessions`
+  now calls `xyz.openbmc_project.User.Manager / GetUserInfo` after PAM authentication
+  to look up the user's `priv-admin`, `priv-operator`, `priv-user`, or `priv-noaccess`
+  group, mapping it to a Redfish role (`Administrator`, `Operator`, `ReadOnly`,
+  `NoAccess`). Falls back to `"ReadOnly"` if DBus is unavailable or call fails.
+
+- **LogServices/EventLog instance endpoint** (`systems.rs`, `mod.rs`) —
+  `GET /redfish/v1/Systems/system/LogServices/EventLog` now returns a fully-formed
+  `LogService.v1_4_0.LogService` resource with `Entries` link and `ClearLog` action
+  target. Route registered in `mod.rs`.
+
+- **`ZBusClient::set_property()` implementation** (`dbus/mod.rs`) — Previously
+  returned an immediate error. Now builds a `PropertiesProxy`, converts the
+  `serde_json::Value` to a `zbus::zvariant::Value` via `json_to_zvariant()`, and
+  calls `org.freedesktop.DBus.Properties.Set`. Supports string, bool, integer,
+  double, and string-array JSON types. Object and null values return a descriptive
+  error. Six new unit tests cover all conversion paths.
+
+- **DBus chassis enumeration** (`chassis.rs`) — `GET /redfish/v1/Chassis` now queries
+  `xyz.openbmc_project.Inventory.Manager / GetManagedObjects` and returns all objects
+  that implement `xyz.openbmc_project.Inventory.Item.Chassis`, ordered lexicographically.
+  Falls back to a single `"chassis"` member when DBus is unavailable or the inventory
+  is empty. `GET /redfish/v1/Chassis/{id}` validates the chassis ID against the same
+  inventory, also accepting the default `"chassis"` ID as a fallback.
+
+- **Processor and Memory instance endpoints** (`systems.rs`, `mod.rs`) —
+  `GET /redfish/v1/Systems/system/Processors/{id}` returns a `Processor.v1_16_0.Processor`
+  resource with `Model`, `TotalCores`, and `TotalThreads` pulled from
+  `xyz.openbmc_project.Inventory.Item.Cpu` in DBus. Returns 404 if the ID is not found
+  in the inventory.
+  `GET /redfish/v1/Systems/system/Memory/{id}` returns a `Memory.v1_18_0.Memory`
+  resource with `CapacityMiB`, `OperatingSpeedMhz`, and `MemoryType` pulled from
+  `xyz.openbmc_project.Inventory.Item.Dimm`. Both routes registered in `mod.rs`.
+  The Processors and Memory collections are updated to enumerate live DBus inventory.
+
+### Changed
+
+- `systems.rs` Processors and Memory collections now dynamically enumerate DBus
+  inventory objects rather than returning hard-coded empty collections.
+- `privilege.rs` `session_role()` now reads `session.role` rather than returning
+  a hard-coded `"ReadOnly"` for all sessions.
+- All DBus-querying handlers use the `ZBusClient::from_connection()` constructor
+  with graceful fallback when `AppState.dbus_connection` is `None`.
+
+### Tests
+
+- 112 unit tests passing (up from ~80); all new DBus-integration paths covered with
+  no-DBus fallback tests. New coverage for privilege checks with specific roles,
+  `json_to_zvariant` conversion, EventLog endpoint, PowerState mapping.
+
+---
+
 - **SessionService API** — Full Redfish SessionService resource family
   (GET/PATCH /redfish/v1/SessionService, GET/POST /redfish/v1/SessionService/Sessions,
   GET/DELETE /redfish/v1/SessionService/Sessions/{id}). Session creation via PAM,
@@ -88,8 +167,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- RBAC privilege checking infrastructure in place (enforcement TODO per route)
+- RBAC privilege checking infrastructure in place
 - Session tokens use UUID v4 (119-bit entropy, above OWASP minimum of 64 bits)
+- Redfish role stored per-session and read at privilege check time
 
 ## [0.1.0] - 2026-04-28
 

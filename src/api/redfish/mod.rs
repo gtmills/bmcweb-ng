@@ -28,14 +28,20 @@ pub fn router() -> Router<Arc<AppState>> {
                post(systems::reset_system))
         .route("/Systems/:system_id/Processors",
                get(systems::get_processors_collection))
+        .route("/Systems/:system_id/Processors/:processor_id",
+               get(systems::get_processor))
         .route("/Systems/:system_id/Memory",
                get(systems::get_memory_collection))
+        .route("/Systems/:system_id/Memory/:memory_id",
+               get(systems::get_memory))
         .route("/Systems/:system_id/Storage",
                get(systems::get_storage_collection))
         .route("/Systems/:system_id/EthernetInterfaces",
                get(systems::get_ethernet_interfaces_collection))
         .route("/Systems/:system_id/LogServices",
                get(systems::get_system_log_services))
+        .route("/Systems/:system_id/LogServices/EventLog",
+               get(systems::get_system_event_log))
         // Chassis routes
         .route("/Chassis", get(chassis::get_chassis_collection))
         .route("/Chassis/:chassis_id", get(chassis::get_chassis))
@@ -106,11 +112,7 @@ pub fn router() -> Router<Arc<AppState>> {
                get(update_service::get_firmware_inventory))
         .route("/UpdateService/Actions/UpdateService.SimpleUpdate",
                post(update_service::simple_update))
-        // TODO: Add more Redfish resource routes:
+        // Placeholder routes for future services:
         // .route("/TelemetryService", get(telemetry_service::get_telemetry_service))
         // .route("/CertificateService", get(certificate_service::get_certificate_service))
 }
-
-// TODO: Add more Redfish resource modules:
-// - telemetry - Telemetry service
-// - certificates - Certificate management

@@ -22,7 +22,71 @@ use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 use crate::auth::session::{SessionType, UserSession};
+use crate::dbus::{DbusClient, ZBusClient};
 use crate::AppState;
+
+/// Fetch the Redfish role for a username from DBus.
+///
+/// Uses `xyz.openbmc_project.User.Manager.GetUserInfo` on the user manager
+/// service to retrieve the group membership, which maps to a Redfish role.
+///
+/// Returns "ReadOnly" on any error so that the session is still usable with
+/// minimal access rather than failing entirely.
+async fn fetch_user_role(
+    state: &AppState,
+    username: &str,
+) -> String {
+    let conn = match state.dbus_connection.as_deref() {
+        Some(c) => c,
+        None => return "ReadOnly".to_string(),
+    };
+
+    let client = ZBusClient::from_connection(conn.clone());
+
+    // xyz.openbmc_project.User.Manager.GetUserInfo returns a dict of user
+    // attributes.  The "UserGroups" key contains a list of group strings;
+    // the first group that maps to a Redfish role wins.
+    //
+    // OpenBMC user group → Redfish role mapping:
+    //   priv-admin    → Administrator
+    //   priv-operator → Operator
+    //   priv-user     → ReadOnly
+    //   priv-noaccess → NoAccess
+    match client
+        .call_method(
+            "xyz.openbmc_project.User.Manager",
+            "/xyz/openbmc_project/user",
+            "xyz.openbmc_project.User.Manager",
+            "GetUserInfo",
+            Some(&serde_json::json!(username)),
+        )
+        .await
+    {
+        Ok(info) => {
+            // Response is a dict; look for "UserGroups" key
+            if let Some(groups) = info.get("UserGroups").and_then(|v| v.as_array()) {
+                for group in groups {
+                    let role = match group.as_str().unwrap_or("") {
+                        "priv-admin"    => Some("Administrator"),
+                        "priv-operator" => Some("Operator"),
+                        "priv-user"     => Some("ReadOnly"),
+                        "priv-noaccess" => Some("NoAccess"),
+                        _               => None,
+                    };
+                    if let Some(r) = role {
+                        return r.to_string();
+                    }
+                }
+            }
+            warn!("Could not determine role for user '{}' from GetUserInfo response", username);
+            "ReadOnly".to_string()
+        }
+        Err(e) => {
+            warn!("GetUserInfo DBus call failed for '{}': {} — defaulting to ReadOnly", username, e);
+            "ReadOnly".to_string()
+        }
+    }
+}
 
 /// Request body for creating a new session (POST /redfish/v1/SessionService/Sessions)
 #[derive(Debug, Deserialize)]
@@ -208,7 +272,7 @@ pub async fn create_session(
     // Derive client IP
     let client_ip = crate::auth::middleware::extract_client_ip(&headers);
 
-    let session = match session_store.create_session(
+    let mut session = match session_store.create_session(
         body.username.clone(),
         client_ip,
         SessionType::Token,
@@ -229,9 +293,14 @@ pub async fn create_session(
         }
     };
 
+    // Fetch the user's Redfish role from DBus and store it on the session
+    let role = fetch_user_role(&state, &body.username).await;
+    session_store.set_session_role(&session.id, role.clone());
+    session.set_role(role);
+
     info!(
-        "Created session {} for user '{}'",
-        session.id, session.username
+        "Created session {} for user '{}' with role '{}'",
+        session.id, session.username, session.role
     );
 
     let token = session.token.clone().unwrap_or_default();

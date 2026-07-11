@@ -20,6 +20,7 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tracing::{debug, warn};
 
+use crate::dbus::{DbusClient, ZBusClient};
 use crate::AppState;
 
 // ---------------------------------------------------------------------------
@@ -46,29 +47,106 @@ fn validate_chassis_id(chassis_id: &str) -> Result<(), StatusCode> {
 // ---------------------------------------------------------------------------
 
 /// GET /redfish/v1/Chassis
+///
+/// Enumerates chassis objects from DBus via `GetManagedObjects` on
+/// `xyz.openbmc_project.Inventory.Manager`.  Falls back to a single
+/// hard-coded "chassis" member when DBus is unavailable.
 pub async fn get_chassis_collection(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
 ) -> Result<Json<Value>, StatusCode> {
     debug!("GET /redfish/v1/Chassis");
+
+    let members: Vec<Value> = if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        match client
+            .get_managed_objects(
+                "xyz.openbmc_project.Inventory.Manager",
+                "/xyz/openbmc_project/inventory",
+            )
+            .await
+        {
+            Ok(objects) => {
+                let chassis_iface = "xyz.openbmc_project.Inventory.Item.Chassis";
+                let mut chassis_ids: Vec<String> = objects
+                    .iter()
+                    .filter(|(_, ifaces)| ifaces.contains_key(chassis_iface))
+                    .map(|(path, _)| {
+                        path.rsplit('/').next().unwrap_or("chassis").to_string()
+                    })
+                    .collect();
+                // Stable ordering
+                chassis_ids.sort();
+
+                if chassis_ids.is_empty() {
+                    // No chassis in inventory — fall back to default
+                    vec![json!({ "@odata.id": "/redfish/v1/Chassis/chassis" })]
+                } else {
+                    chassis_ids
+                        .iter()
+                        .map(|id| {
+                            json!({ "@odata.id": format!("/redfish/v1/Chassis/{}", id) })
+                        })
+                        .collect()
+                }
+            }
+            Err(e) => {
+                warn!("Failed to enumerate chassis from DBus: {}", e);
+                vec![json!({ "@odata.id": "/redfish/v1/Chassis/chassis" })]
+            }
+        }
+    } else {
+        vec![json!({ "@odata.id": "/redfish/v1/Chassis/chassis" })]
+    };
 
     Ok(Json(json!({
         "@odata.type": "#ChassisCollection.ChassisCollection",
         "@odata.id": "/redfish/v1/Chassis",
         "Name": "Chassis Collection",
-        "Members@odata.count": 1,
-        "Members": [{ "@odata.id": "/redfish/v1/Chassis/chassis" }]
+        "Members@odata.count": members.len(),
+        "Members": members
     })))
 }
 
 /// GET /redfish/v1/Chassis/{chassis_id}
 pub async fn get_chassis(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Path(chassis_id): Path<String>,
 ) -> Result<Json<Value>, StatusCode> {
     debug!("GET /redfish/v1/Chassis/{}", chassis_id);
-    validate_chassis_id(&chassis_id)?;
 
-    // TODO: Query DBus xyz.openbmc_project.Inventory.Item.Chassis for live data
+    // Validate chassis_id against DBus inventory when available, else accept "chassis"
+    if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        match client
+            .get_managed_objects(
+                "xyz.openbmc_project.Inventory.Manager",
+                "/xyz/openbmc_project/inventory",
+            )
+            .await
+        {
+            Ok(objects) => {
+                let chassis_iface = "xyz.openbmc_project.Inventory.Item.Chassis";
+                let exists = objects.iter().any(|(path, ifaces)| {
+                    ifaces.contains_key(chassis_iface)
+                        && path.rsplit('/').next() == Some(chassis_id.as_str())
+                });
+                if !exists {
+                    // Also accept the default "chassis" id as a fallback
+                    if chassis_id != "chassis" {
+                        warn!("Chassis '{}' not found in DBus inventory", chassis_id);
+                        return Err(StatusCode::NOT_FOUND);
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("DBus GetManagedObjects failed, falling back to local validation: {}", e);
+                validate_chassis_id(&chassis_id)?;
+            }
+        }
+    } else {
+        validate_chassis_id(&chassis_id)?;
+    }
+
     Ok(Json(json!({
         "@odata.type": "#Chassis.v1_23_0.Chassis",
         "@odata.id": "/redfish/v1/Chassis/chassis",

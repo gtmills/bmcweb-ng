@@ -41,6 +41,9 @@ pub struct UserSession {
     pub expires_at: DateTime<Utc>,
     /// Whether user can only configure self
     pub configure_self_only: bool,
+    /// Redfish role assigned to this session (e.g. "Administrator", "Operator", "ReadOnly").
+    /// Populated from xyz.openbmc_project.User.Manager.GetUserInfo at login time.
+    pub role: String,
 }
 
 impl UserSession {
@@ -69,7 +72,17 @@ impl UserSession {
             last_activity: now,
             expires_at: now + Duration::seconds(timeout_seconds),
             configure_self_only: false,
+            // Default to ReadOnly until the caller upgrades it via set_role()
+            role: "ReadOnly".to_string(),
         }
+    }
+
+    /// Set the Redfish role for this session.
+    ///
+    /// Call this immediately after `new()` once the role has been fetched from
+    /// `xyz.openbmc_project.User.Manager.GetUserInfo`.
+    pub fn set_role(&mut self, role: String) {
+        self.role = role;
     }
 
     /// Check if session is expired
@@ -218,6 +231,16 @@ impl SessionStore {
             sessions.remove(&id);
         }
         count
+    }
+
+    /// Update the role for an existing session.
+    ///
+    /// Called after session creation once the role has been fetched from DBus.
+    pub fn set_session_role(&self, session_id: &str, role: String) {
+        let mut sessions = self.sessions.write().unwrap();
+        if let Some(session) = sessions.get_mut(session_id) {
+            session.set_role(role);
+        }
     }
 
     /// Clean up expired sessions

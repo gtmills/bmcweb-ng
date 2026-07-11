@@ -175,15 +175,14 @@ pub fn check_privilege(
     }
 }
 
-/// Extract the role string from a session, defaulting to "ReadOnly" for
-/// sessions that were created via Basic auth and have no explicit role set.
-fn session_role(_session: &UserSession) -> String {
-    // In the current implementation, the role is not yet stored in the session.
-    // TODO: Store the role in UserSession after fetching it from DBus
-    //       xyz.openbmc_project.User.Manager.GetUserInfo during session creation.
-    // For now, default to ReadOnly so that Basic-auth sessions can at least
-    // read Redfish resources.
-    "ReadOnly".to_string()
+/// Extract the role string from a session.
+///
+/// The role is stored on `UserSession.role`, set at session creation time
+/// by fetching `xyz.openbmc_project.User.Manager.GetUserInfo` from DBus.
+/// Basic-auth sessions that were created before DBus integration will carry
+/// the default "ReadOnly" role set in [`UserSession::new`].
+fn session_role(session: &UserSession) -> String {
+    session.role.clone()
 }
 
 #[cfg(test)]
@@ -199,6 +198,7 @@ mod tests {
             SessionType::Token,
             3600,
         );
+        s.set_role(role.to_string());
         s
     }
 
@@ -239,6 +239,37 @@ mod tests {
             check_privilege(None, PRIVILEGE_GET),
             Err(StatusCode::UNAUTHORIZED)
         );
+    }
+
+    #[test]
+    fn test_check_privilege_administrator_can_read() {
+        let session = make_session("Administrator");
+        assert!(check_privilege(Some(&session), PRIVILEGE_GET).is_ok());
+    }
+
+    #[test]
+    fn test_check_privilege_administrator_can_configure() {
+        let session = make_session("Administrator");
+        assert!(check_privilege(Some(&session), PRIVILEGE_PATCH).is_ok());
+        assert!(check_privilege(Some(&session), PRIVILEGE_ACTION).is_ok());
+    }
+
+    #[test]
+    fn test_check_privilege_readonly_cannot_configure() {
+        let session = make_session("ReadOnly");
+        assert!(check_privilege(Some(&session), PRIVILEGE_GET).is_ok());
+        assert_eq!(
+            check_privilege(Some(&session), PRIVILEGE_PATCH),
+            Err(StatusCode::FORBIDDEN)
+        );
+    }
+
+    #[test]
+    fn test_session_role_from_stored_role() {
+        let admin = make_session("Administrator");
+        assert_eq!(session_role(&admin), "Administrator");
+        let ro = make_session("ReadOnly");
+        assert_eq!(session_role(&ro), "ReadOnly");
     }
 
     #[test]

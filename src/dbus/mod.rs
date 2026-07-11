@@ -164,21 +164,43 @@ impl DbusClient for ZBusClient {
         path: &str,
         interface: &str,
         property: &str,
-        _value: DbusValue,
+        value: DbusValue,
     ) -> Result<()> {
         debug!(
             "DBus SetProperty: path={} interface={} property={}",
             path, interface, property
         );
 
-        // TODO: Convert serde_json::Value back to zvariant::Value for the Set call.
-        // This requires knowing the D-Bus signature of the property.
-        // For now this is a placeholder; real implementations use typed proxies.
-        warn!(
-            "DBus SetProperty not yet fully implemented for {}.{} at {}",
-            interface, property, path
-        );
-        Err(anyhow!("SetProperty not yet implemented"))
+        let proxy = zbus::fdo::PropertiesProxy::builder(&self.connection)
+            .path(path)
+            .context("Invalid DBus path")?
+            .build()
+            .await
+            .context("Failed to build Properties proxy")?;
+
+        let iface_name = InterfaceName::try_from(interface)
+            .with_context(|| format!("Invalid interface name: {}", interface))?;
+
+        // Convert serde_json::Value to zbus::zvariant::Value.
+        //
+        // D-Bus properties are strongly typed; we support the JSON types that
+        // map unambiguously to D-Bus primitives.  Callers that need to set a
+        // property with a non-string type should use a typed zbus proxy instead.
+        let zval: zbus::zvariant::Value<'_> = json_to_zvariant(&value)
+            .with_context(|| format!(
+                "Cannot convert JSON value to D-Bus variant for {}.{} at {}",
+                interface, property, path
+            ))?;
+
+        proxy
+            .set(iface_name, property, &zval)
+            .await
+            .with_context(|| format!(
+                "Failed to set property {}.{} at {}",
+                interface, property, path
+            ))?;
+
+        Ok(())
     }
 
     async fn get_all_properties(
@@ -295,7 +317,7 @@ impl DbusClient for ZBusClient {
 }
 
 // ---------------------------------------------------------------------------
-// Type conversion helper
+// Type conversion helpers
 // ---------------------------------------------------------------------------
 
 /// Convert a [`zbus::zvariant::OwnedValue`] to a [`serde_json::Value`].
@@ -306,6 +328,61 @@ fn zvariant_to_json(value: zbus::zvariant::OwnedValue) -> Result<Value> {
     let json_value = serde_json::to_value(&value)
         .context("Failed to serialise zvariant::OwnedValue to JSON")?;
     Ok(json_value)
+}
+
+/// Convert a [`serde_json::Value`] to a [`zbus::zvariant::Value`].
+///
+/// Supports the JSON primitives that map unambiguously to D-Bus types:
+/// - JSON string  → D-Bus `s` (string)
+/// - JSON bool    → D-Bus `b` (boolean)
+/// - JSON integer → D-Bus `i` (int32) or `x` (int64) depending on range
+/// - JSON float   → D-Bus `d` (double)
+/// - JSON array of strings → D-Bus `as`
+///
+/// Returns an error for JSON `null` or object types, which do not have a
+/// canonical D-Bus representation.  Callers that need to set complex types
+/// should build typed proxies from introspection XML.
+fn json_to_zvariant(value: &Value) -> Result<zbus::zvariant::Value<'_>> {
+    use zbus::zvariant::Value as ZVal;
+    match value {
+        Value::String(s) => Ok(ZVal::from(s.as_str())),
+        Value::Bool(b) => Ok(ZVal::from(*b)),
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                if i >= i32::MIN as i64 && i <= i32::MAX as i64 {
+                    Ok(ZVal::from(i as i32))
+                } else {
+                    Ok(ZVal::from(i))
+                }
+            } else if let Some(f) = n.as_f64() {
+                Ok(ZVal::from(f))
+            } else {
+                Err(anyhow!("Cannot convert JSON number to D-Bus value: {}", n))
+            }
+        }
+        Value::Array(arr) => {
+            // Only arrays of strings are supported for the generic path
+            let strings: Result<Vec<&str>> = arr
+                .iter()
+                .map(|v| {
+                    v.as_str()
+                        .ok_or_else(|| anyhow!("Array element is not a string: {}", v))
+                })
+                .collect();
+            match strings {
+                Ok(ss) => {
+                    let zval_strings: Vec<zbus::zvariant::Value<'_>> =
+                        ss.iter().map(|s| ZVal::from(*s)).collect();
+                    Ok(ZVal::from(zval_strings))
+                }
+                Err(e) => Err(e.context("Cannot convert JSON array to D-Bus as")),
+            }
+        }
+        Value::Null => Err(anyhow!("Cannot represent JSON null as a D-Bus value")),
+        Value::Object(_) => Err(anyhow!(
+            "Cannot represent a JSON object as a D-Bus value; use a typed proxy"
+        )),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -480,5 +557,39 @@ mod tests {
         assert_eq!(all.len(), 2);
         assert_eq!(all["Prop1"], json!("val1"));
         assert_eq!(all["Prop2"], json!("val2"));
+    }
+
+    #[test]
+    fn test_json_to_zvariant_string() {
+        let v = json!("hello");
+        let result = json_to_zvariant(&v);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_json_to_zvariant_bool() {
+        assert!(json_to_zvariant(&json!(true)).is_ok());
+        assert!(json_to_zvariant(&json!(false)).is_ok());
+    }
+
+    #[test]
+    fn test_json_to_zvariant_integer() {
+        assert!(json_to_zvariant(&json!(42)).is_ok());
+        assert!(json_to_zvariant(&json!(i64::MAX)).is_ok());
+    }
+
+    #[test]
+    fn test_json_to_zvariant_float() {
+        assert!(json_to_zvariant(&json!(3.14)).is_ok());
+    }
+
+    #[test]
+    fn test_json_to_zvariant_null_errors() {
+        assert!(json_to_zvariant(&json!(null)).is_err());
+    }
+
+    #[test]
+    fn test_json_to_zvariant_object_errors() {
+        assert!(json_to_zvariant(&json!({"key": "value"})).is_err());
     }
 }
