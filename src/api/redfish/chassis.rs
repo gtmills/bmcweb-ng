@@ -361,6 +361,24 @@ pub async fn get_chassis_power(
         (vec![], vec![])
     };
 
+    // Read total power consumption from DBus (chassis power sensor)
+    // On OpenBMC: /xyz/openbmc_project/sensors/power/total_power
+    //   interface: xyz.openbmc_project.Sensor.Value
+    let total_power: Option<f64> = if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        client
+            .get_property(
+                "/xyz/openbmc_project/sensors/power/total_power",
+                "xyz.openbmc_project.Sensor.Value",
+                "Value",
+            )
+            .await
+            .ok()
+            .and_then(|v| v.as_f64())
+    } else {
+        None
+    };
+
     Ok(Json(json!({
         "@odata.type": "#Power.v1_7_2.Power",
         "@odata.id": format!("/redfish/v1/Chassis/{}/Power", chassis_id),
@@ -370,7 +388,7 @@ pub async fn get_chassis_power(
             {
                 "MemberId": "0",
                 "Name": "Chassis Power Control",
-                "PowerConsumedWatts": null,
+                "PowerConsumedWatts": total_power,
                 "PowerCapacityWatts": null,
                 "PowerLimit": {
                     "LimitInWatts": null,
