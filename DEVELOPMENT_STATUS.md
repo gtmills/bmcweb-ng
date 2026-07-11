@@ -28,9 +28,11 @@ bmcweb-ng/
 │   │   │   ├── managers.rs      ✅ Managers + NetworkProtocol/EthernetInterfaces/LogServices
 │   │   │   ├── sessions.rs      ✅ SessionService + Sessions (full login flow)
 │   │   │   ├── accounts.rs      ✅ AccountService + Accounts + Roles
-│   │   │   ├── event_service.rs ✅ EventService + Subscriptions + SubmitTestEvent
-│   │   │   ├── task_service.rs  ✅ TaskService + Tasks
-│   │   │   └── update_service.rs ✅ UpdateService + FirmwareInventory + SimpleUpdate
+│   │   │   ├── event_service.rs      ✅ EventService + Subscriptions + SubmitTestEvent
+│   │   │   ├── task_service.rs       ✅ TaskService + Tasks
+│   │   │   ├── update_service.rs     ✅ UpdateService + FirmwareInventory + SimpleUpdate
+│   │   │   ├── certificate_service.rs ✅ CertificateService + CertificateLocations
+│   │   │   └── telemetry_service.rs  ✅ TelemetryService + MetricDefinitions/Reports/ReportDefinitions
 │   │   └── websocket/
 │   │       └── mod.rs       ✅ Serial console (/console0), KVM stub (/kvm/0)
 │   ├── auth/
@@ -194,10 +196,7 @@ bmcweb-ng/
 ### ❌ Not Yet Implemented
 
 1. **Additional Redfish Resources**
-   - TelemetryService
-   - CertificateService
    - Registries / JsonSchemas
-   - Log entries (individual log event access, `EventLog/Entries`)
 
 2. **Additional Authentication**
    - Mutual TLS (mTLS) certificate authentication
@@ -325,8 +324,6 @@ Measured on OpenBMC `qemuarm` (emulated Cortex-A15, 256 MB RAM). Binary:
 - [ ] WebSocket KVM (RFB protocol)
 - [ ] Virtual Media
 - [ ] DBus REST API
-- [ ] TelemetryService
-- [ ] CertificateService
 - [ ] mTLS authentication
 - [ ] LDAP integration
 

@@ -149,11 +149,11 @@ cargo test --test '*'
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_service_root_returns_valid_json() {
-        let result = get_service_root();
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap()["@odata.type"], "#ServiceRoot.v1_15_0.ServiceRoot");
+    #[tokio::test]
+    async fn test_service_root_returns_valid_json() {
+        let state = make_test_state();
+        let result = get_service_root(State(state)).await;
+        assert_eq!(result.status(), StatusCode::OK);
     }
 
     #[tokio::test]
@@ -255,12 +255,11 @@ We follow the official Rust style guide with these additions:
 /// # Example
 ///
 /// ```
-/// use bmcweb_ng::api::redfish::get_service_root;
+/// use bmcweb_ng::api::redfish::service_root;
 ///
-/// let service_root = get_service_root()?;
-/// println!("Redfish Version: {}", service_root["RedfishVersion"]);
+/// // Handler is async and takes axum State — call via the router in tests.
 /// ```
-pub fn get_service_root() -> Result<serde_json::Value> {
+pub async fn get_service_root(State(state): State<AppState>) -> impl IntoResponse {
     // Implementation
 }
 ```

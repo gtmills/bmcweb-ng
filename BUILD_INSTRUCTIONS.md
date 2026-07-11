@@ -113,11 +113,11 @@ cargo run
 # Run with custom config
 cargo run -- --config /path/to/config.toml
 
-# Run with debug logging
-cargo run -- --log-level debug
+# Run with debug logging (set via environment variable)
+RUST_LOG=debug cargo run
 
-# Run with JSON logs
-cargo run -- --json-logs
+# Run with info-level JSON structured logging
+RUST_LOG=info cargo run
 ```
 
 ## Installation
@@ -240,16 +240,20 @@ sudo apt-get install gcc-aarch64-linux-gnu
 cargo build --release --target aarch64-unknown-linux-gnu
 ```
 
-### For ARMv7 (armv7)
+### For ARM32 (arm-unknown-linux-gnueabihf)
+
+This is the primary OpenBMC target (qemuarm, AST2600/AST2700).
+The `.cargo/config.toml` in the repository already sets the linker.
+
 ```bash
 # Add target
-rustup target add armv7-unknown-linux-gnueabihf
+rustup target add arm-unknown-linux-gnueabihf
 
 # Install cross-compiler
 sudo apt-get install gcc-arm-linux-gnueabihf
 
 # Build
-cargo build --release --target armv7-unknown-linux-gnueabihf
+cargo build --release --target arm-unknown-linux-gnueabihf
 ```
 
 ## Yocto Integration

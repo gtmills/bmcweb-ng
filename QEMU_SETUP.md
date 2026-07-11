@@ -147,7 +147,7 @@ of being started.
 
 ## Smoke Test Suite
 
-The test script (`qemu_test_v3.sh`) runs 33+ checks in two groups:
+The test script (`qemu_test_v3.sh`) runs **56 checks** in four groups:
 
 ### Original 17 smoke tests
 
@@ -166,7 +166,7 @@ The test script (`qemu_test_v3.sh`) runs 33+ checks in two groups:
 | EthernetInterfaces | type field |
 | Auth enforcement | unauthenticated GET → 401 |
 
-### New DBus-wiring tests (16 additional)
+### Round 1 — DBus wiring (10 additional)
 
 | Category | What is verified |
 |----------|-----------------|
@@ -180,6 +180,45 @@ The test script (`qemu_test_v3.sh`) runs 33+ checks in two groups:
 | Memory collection | Correct @odata.type |
 | Chassis enumeration | Dynamic DBus enumeration + `/Chassis/chassis` valid |
 | 404 enforcement | Bad Processor/Memory/Chassis IDs return 404 |
+
+### Round 2 — Extended DBus (6 additional)
+
+| Category | What is verified |
+|----------|-----------------|
+| Chassis Power | `/Chassis/chassis/Power` returns correct type |
+| Chassis Thermal | `/Chassis/chassis/Thermal` returns correct type |
+| Chassis Sensors | `/Chassis/chassis/Sensors` returns correct type |
+| BMC reset action | POST `Manager.Reset` returns 204 |
+| System reset action | POST `ComputerSystem.Reset` returns 204 |
+| NIC enumeration | EthernetInterfaces count ≥ 1 |
+
+### Rounds 3–10 — Full DBus wiring (23 additional)
+
+| Category | What is verified |
+|----------|-----------------|
+| Boot target | `BootSourceOverrideTarget` is a valid Redfish value or "None" |
+| EventLog Entries | Collection type + Members array present |
+| PATCH /Systems/system | Sets BootSourceOverrideTarget, returns 200 |
+| PATCH NetworkProtocol | Sets HostName, returns 200 |
+| Storage collection | `/Systems/system/Storage` returns correct type |
+| PATCH EthernetInterface | DHCPv4 patch returns 200 |
+| Dynamic NIC validation | GET by live NIC id returns 200 |
+| AssetTag | Present on GET /Systems/system |
+| PATCH AssetTag | PATCH succeeds and returns updated value |
+| Chassis LED | IndicatorLED field present |
+| PATCH Chassis LED | PATCH IndicatorLED returns 200 |
+| PowerConsumedWatts | Present in Chassis Power response |
+| FirmwareInventory DBus | Members list from live software objects |
+| CertificateService | `/redfish/v1/CertificateService` returns correct type |
+| TelemetryService | `/redfish/v1/TelemetryService` returns correct type |
+| Registries stub | `/redfish/v1/Registries` returns correct type |
+| JsonSchemas stub | `/redfish/v1/JsonSchemas` returns correct type |
+| AccountService lockout | MaxLoginAttemptBeforeLockout field present |
+| Create/delete account | POST + DELETE round-trip returns 201 / 200 |
+| Metrics endpoint | `/metrics` returns 200 with Prometheus text |
+| WebSocket serial | `/console0` upgrade returns 101 |
+| Concurrent GETs | 20 simultaneous GETs all return 200 |
+| Startup time | bmcweb-ng answers within 3 seconds of start |
 
 ---
 

@@ -33,7 +33,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `xyz.openbmc_project.Software.BMC.Updater` using `GetManagedObjects`.
   Results are deduplicated with the in-memory firmware list from upload operations.
 
-
 - **Storage collection from DBus** (`systems.rs`) —
   `GET /Systems/system/Storage` now enumerates storage controller objects via
   `GetManagedObjects` filtering on `Inventory.Item.StorageController`.

@@ -150,19 +150,19 @@ cargo build
 cargo build --release
 
 # Binary location: target/release/bmcwebd-ng
-# Size: <1MB (stripped)
+# Size: ~5 MB (dynamically-linked ARM EABI release)
 ```
 
 ### Minimum Size Build
 
 ```bash
-# Optimize for binary size
-cargo build --release --config profile.release.opt-level='"z"'
+# Optimize for binary size (opt-level = "z" is already set in Cargo.toml release profile)
+cargo build --release
 
 # Further reduce size by stripping symbols
 strip target/release/bmcwebd-ng
 
-# Expected size: <800KB
+# Expected size: ~4-5 MB (dynamically-linked); ~3-4 MB with musl static target
 ```
 
 ### Development Build with Fast Compilation
@@ -183,23 +183,17 @@ cargo build
 
 ### Feature Flags
 
-bmcweb-ng supports conditional compilation via Cargo features:
+bmcweb-ng has one conditional feature flag:
 
 ```bash
-# Build with all features (default)
+# Build with PAM authentication (default)
 cargo build --release
 
-# Build with specific features
-cargo build --release --no-default-features --features "redfish,websocket"
+# Build without PAM (useful for non-Linux/test environments)
+cargo build --release --no-default-features
 
 # Available features:
-# - redfish: Redfish API support (default)
-# - websocket: WebSocket support (default)
-# - kvm: KVM over WebSocket (default)
-# - virtual-media: Virtual media support (default)
-# - event-service: Event subscription service (default)
-# - metrics: Prometheus metrics (default)
-# - tracing: OpenTelemetry tracing (default)
+# - pam: PAM-based authentication (default, Linux only)
 ```
 
 ### Build Profiles
@@ -244,21 +238,19 @@ cargo build --release --target aarch64-unknown-linux-gnu
 # Binary location: target/aarch64-unknown-linux-gnu/release/bmcwebd-ng
 ```
 
-### ARM32 (armv7)
+### ARM32 (arm-unknown-linux-gnueabihf)
+
+This is the primary target for OpenBMC `qemuarm` and AST2600/AST2700 hardware.
+The `.cargo/config.toml` already configures the linker for this target.
 
 ```bash
 # Install cross-compilation toolchain
-rustup target add armv7-unknown-linux-gnueabihf
+rustup target add arm-unknown-linux-gnueabihf
 sudo apt-get install gcc-arm-linux-gnueabihf
 
-# Configure Cargo
-cat >> ~/.cargo/config.toml << EOF
-[target.armv7-unknown-linux-gnueabihf]
-linker = "arm-linux-gnueabihf-gcc"
-EOF
-
-# Build
-cargo build --release --target armv7-unknown-linux-gnueabihf
+# Build (no extra --features flags needed; omit --features pam when cross-compiling
+# if the PAM headers are not in the sysroot)
+cargo build --release --target arm-unknown-linux-gnueabihf
 ```
 
 ### Using cross
@@ -270,8 +262,8 @@ cargo install cross
 # Build for ARM64
 cross build --release --target aarch64-unknown-linux-gnu
 
-# Build for ARM32
-cross build --release --target armv7-unknown-linux-gnueabihf
+# Build for ARM32 (OpenBMC target)
+cross build --release --target arm-unknown-linux-gnueabihf
 
 # Build for RISC-V
 cross build --release --target riscv64gc-unknown-linux-gnu

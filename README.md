@@ -21,15 +21,15 @@ The original bmcweb is a mature, production-ready C++ application. This rewrite 
 
 ### Key Features
 
-- ✅ **Redfish API** - Full DMTF Redfish specification compliance
+- ✅ **Redfish API** - Full DMTF Redfish specification compliance (ServiceRoot through TelemetryService)
 - ✅ **Multiple Protocols** - HTTP/1.1, HTTP/2, HTTPS with TLS 1.3
 - ✅ **Authentication** - Basic auth with PAM, Session management, Token-based auth
-- ✅ **Event Service** - Event subscriptions and notifications to external systems
+- ✅ **Event Service** - Event subscriptions and async notifications to external systems
 - ✅ **Task Service** - Long-running operation tracking and management
-- ✅ **Update Service** - Firmware update management and inventory
-- ⚠️  **WebSocket Support** - KVM, Serial Console, Event Subscriptions (planned)
-- ⚠️  **DBus Integration** - Async DBus communication with OpenBMC services (partial)
-- ✅ **Performance** - <1MB binary, <10MB memory, <1s startup time
+- ✅ **Update Service** - Firmware update management and live DBus inventory
+- ✅ **DBus Integration** - Comprehensive async DBus wiring to OpenBMC services
+- ⚠️  **WebSocket Support** - Serial console fully working; KVM stub in place
+- ✅ **Performance** - ~5MB binary, <10MB memory (idle), <1s startup on real hardware
 - ✅ **Observability** - Structured logging, Prometheus metrics support
 
 ## Architecture
@@ -98,20 +98,11 @@ tls_key = "/etc/bmcweb/key.pem"
 max_connections = 100
 
 [auth]
-methods = ["basic", "session", "mtls"]
 session_timeout_seconds = 3600
 max_sessions = 64
 
-[features]
-redfish = true
-dbus_rest = true
-kvm = true
-virtual_media = true
-event_service = true
-
 [logging]
 level = "info"
-format = "json"
 
 [metrics]
 enabled = true
@@ -137,44 +128,49 @@ cargo watch -x run
 bmcweb-ng/
 ├── src/
 │   ├── main.rs              # Application entry point
-│   ├── config/              # Configuration management
-│   ├── api/                 # API layer
-│   │   ├── redfish/         # Redfish endpoints
-│   │   ├── dbus_rest/       # DBus REST API
-│   │   └── websocket/       # WebSocket handlers
-│   ├── services/            # Business logic
-│   │   ├── system/          # System management
-│   │   ├── chassis/         # Chassis management
-│   │   ├── manager/         # Manager resources
-│   │   └── session/         # Session management
-│   ├── dbus/                # DBus abstraction layer
-│   │   ├── client.rs        # DBus client trait
-│   │   ├── zbus_impl.rs     # zbus implementation
-│   │   └── mock.rs          # Mock for testing
+│   ├── lib.rs               # Core library with AppState
+│   ├── persistent_data.rs   # UUID and session persistence
+│   ├── config/
+│   │   └── mod.rs           # Configuration management (TOML)
+│   ├── api/
+│   │   ├── mod.rs           # API layer
+│   │   └── redfish/         # Redfish endpoints
+│   │       ├── mod.rs                # Router + route table
+│   │       ├── service_root.rs       # ServiceRoot
+│   │       ├── systems.rs            # Systems + sub-resources
+│   │       ├── chassis.rs            # Chassis + sub-resources
+│   │       ├── managers.rs           # Managers + sub-resources
+│   │       ├── sessions.rs           # SessionService + Sessions
+│   │       ├── accounts.rs           # AccountService + Accounts + Roles
+│   │       ├── event_service.rs      # EventService + Subscriptions
+│   │       ├── task_service.rs       # TaskService + Tasks
+│   │       ├── update_service.rs     # UpdateService + FirmwareInventory
+│   │       ├── certificate_service.rs # CertificateService
+│   │       └── telemetry_service.rs  # TelemetryService
 │   ├── auth/                # Authentication & authorization
-│   │   ├── basic.rs         # Basic auth
-│   │   ├── session.rs       # Session auth
-│   │   ├── mtls.rs          # Mutual TLS
-│   │   └── privilege.rs     # Privilege checking
+│   │   ├── mod.rs           # Auth exports
+│   │   ├── basic.rs         # Basic auth with PAM
+│   │   ├── session.rs       # Session management
+│   │   ├── middleware.rs    # Auth middleware
+│   │   └── privilege.rs     # RBAC privilege checking
+│   ├── dbus/
+│   │   └── mod.rs           # DbusClient trait + ZBusClient + MockDbusClient
+│   ├── services/            # Business logic services
+│   │   ├── mod.rs
+│   │   ├── event.rs         # Event Service
+│   │   ├── task.rs          # Task Service
+│   │   └── update.rs        # Update Service
 │   ├── protocol/            # Protocol layer
-│   │   ├── http.rs          # HTTP server
-│   │   ├── websocket.rs     # WebSocket server
-│   │   └── tls.rs           # TLS configuration
-│   ├── schema/              # Generated Redfish types
-│   └── observability/       # Logging, metrics, tracing
-├── schemas/                 # Redfish CSDL/JSON schemas
-├── tests/
-│   ├── unit/               # Unit tests
-│   ├── integration/        # Integration tests
-│   └── performance/        # Performance benchmarks
-├── docs/
-│   ├── architecture/       # Architecture documentation
-│   ├── api/               # API documentation
-│   └── migration/         # Migration guide from bmcweb
-├── Cargo.toml             # Rust dependencies
-├── config.toml            # Default configuration
-├── rustfmt.toml           # Code formatting rules
-└── README.md              # This file
+│   │   ├── mod.rs
+│   │   └── http.rs          # HTTP/HTTPS server (axum + rustls)
+│   └── observability/       # Prometheus metrics
+│       ├── mod.rs
+│       └── metrics.rs
+├── Cargo.toml               # Rust dependencies
+├── config.toml              # Default configuration
+├── bmcweb-ng.service        # Systemd service file
+├── bmcweb-ng.socket         # Systemd socket activation
+└── README.md                # This file
 ```
 
 ## Development

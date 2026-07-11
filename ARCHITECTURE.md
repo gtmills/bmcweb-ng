@@ -95,12 +95,14 @@ Key interfaces are defined as traits:
 ```rust
 #[async_trait]
 pub trait DBusClient: Send + Sync {
-    async fn get_property(&self, path: &str, interface: &str, property: &str) 
+    async fn get_property(&self, path: &str, interface: &str, property: &str)
         -> Result<Value>;
-    async fn set_property(&self, path: &str, interface: &str, property: &str, value: Value) 
+    async fn set_property(&self, path: &str, interface: &str, property: &str, value: Value)
         -> Result<()>;
-    async fn call_method(&self, path: &str, interface: &str, method: &str, args: &[Value]) 
-        -> Result<Value>;
+    async fn call_method(
+        &self, destination: &str, path: &str, interface: &str, method: &str,
+        args: Option<&Value>,
+    ) -> Result<Value>;
 }
 ```
 
@@ -237,7 +239,7 @@ impl SystemService {
 ```rust
 #[async_trait]
 pub trait DBusClient: Send + Sync {
-    async fn get_property(&self, path: &str, interface: &str, property: &str) 
+    async fn get_property(&self, path: &str, interface: &str, property: &str)
         -> Result<Value>;
     // ... other methods
 }
@@ -362,9 +364,14 @@ Shared state is managed using:
 **Example**:
 ```rust
 pub struct AppState {
-    pub sessions: Arc<RwLock<HashMap<String, Session>>>,
-    pub dbus: Arc<dyn DBusClient>,
     pub config: Arc<Config>,
+    pub dbus_connection: Option<Arc<Connection>>,
+    pub system_uuid: String,
+    pub session_store: Option<Arc<SessionStore>>,
+    pub metrics: Option<Arc<Metrics>>,
+    pub event_service: Option<Arc<EventService>>,
+    pub task_service: Option<Arc<TaskService>>,
+    pub update_service: Option<Arc<UpdateService>>,
 }
 ```
 
@@ -433,11 +440,10 @@ pub async fn get_system_info(id: &str) -> Result<SystemInfo> {
 ### Authentication
 
 Multiple authentication methods supported:
-1. **Basic Auth**: Username/password via HTTP Basic
-2. **Session Auth**: Token-based sessions
-3. **Cookie Auth**: Browser-friendly cookies
-4. **mTLS**: Certificate-based authentication
-5. **XToken**: Redfish session tokens
+1. **Basic Auth**: Username/password via HTTP Basic (with PAM)
+2. **Session Auth**: Token-based sessions (X-Auth-Token header)
+3. **Cookie Auth**: Browser-friendly cookies (BMCWEB-SESSION)
+4. **XToken**: Redfish session tokens
 
 ### Authorization
 
