@@ -56,7 +56,9 @@ pub fn router() -> Router<Arc<AppState>> {
                post(systems::clear_event_log))
         // Chassis routes
         .route("/Chassis", get(chassis::get_chassis_collection))
-        .route("/Chassis/:chassis_id", get(chassis::get_chassis))
+        .route("/Chassis/:chassis_id",
+               get(chassis::get_chassis)
+               .patch(chassis::patch_chassis))
         .route("/Chassis/:chassis_id/Power", get(chassis::get_chassis_power))
         .route("/Chassis/:chassis_id/Thermal", get(chassis::get_chassis_thermal))
         .route("/Chassis/:chassis_id/Sensors", get(chassis::get_chassis_sensors))

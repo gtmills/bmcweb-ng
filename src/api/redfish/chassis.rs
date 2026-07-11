@@ -1,12 +1,13 @@
 //! Redfish Chassis and ChassisCollection endpoints
 //!
 //! Implements:
-//! - GET /redfish/v1/Chassis
-//! - GET /redfish/v1/Chassis/{chassis_id}
-//! - GET /redfish/v1/Chassis/{chassis_id}/Power
-//! - GET /redfish/v1/Chassis/{chassis_id}/Thermal
-//! - GET /redfish/v1/Chassis/{chassis_id}/Sensors
-//! - GET /redfish/v1/Chassis/{chassis_id}/NetworkAdapters
+//! - GET   /redfish/v1/Chassis
+//! - GET   /redfish/v1/Chassis/{chassis_id}
+//! - PATCH /redfish/v1/Chassis/{chassis_id}
+//! - GET   /redfish/v1/Chassis/{chassis_id}/Power
+//! - GET   /redfish/v1/Chassis/{chassis_id}/Thermal
+//! - GET   /redfish/v1/Chassis/{chassis_id}/Sensors
+//! - GET   /redfish/v1/Chassis/{chassis_id}/NetworkAdapters
 //!
 //! Reference: DMTF Redfish Chassis schema v1.23.0, Power schema v1.7.2,
 //! Thermal schema v1.8.0
@@ -15,6 +16,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::Json,
+    Json as JsonBody,
 };
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -147,34 +149,125 @@ pub async fn get_chassis(
         validate_chassis_id(&chassis_id)?;
     }
 
+    // Read live chassis data from DBus inventory
+    let (chassis_name, chassis_model, chassis_serial, chassis_part, chassis_led) =
+        if let Some(conn) = state.dbus_connection.as_deref() {
+            let client = ZBusClient::from_connection(conn.clone());
+            let inv_path = format!("/xyz/openbmc_project/inventory/system/chassis/{}", chassis_id);
+            let asset_iface = "xyz.openbmc_project.Inventory.Decorator.Asset";
+            let led_iface = "xyz.openbmc_project.Led.Physical";
+
+            let name = client
+                .get_property(&inv_path, "xyz.openbmc_project.Inventory.Item", "PrettyName")
+                .await.ok().and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| chassis_id.clone());
+            let model = client
+                .get_property(&inv_path, asset_iface, "Model")
+                .await.ok().and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| "Unknown".to_string());
+            let serial = client
+                .get_property(&inv_path, asset_iface, "SerialNumber")
+                .await.ok().and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| "Unknown".to_string());
+            let part = client
+                .get_property(&inv_path, asset_iface, "PartNumber")
+                .await.ok().and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| "Unknown".to_string());
+
+            // IndicatorLED from LED physical object
+            // /xyz/openbmc_project/led/physical/front_id (or similar)
+            let led_state_raw = client
+                .get_property(
+                    "/xyz/openbmc_project/led/physical/front_id",
+                    led_iface,
+                    "State",
+                )
+                .await.ok().and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_default();
+            let led = if led_state_raw.ends_with(".On") {
+                "Blinking"
+            } else {
+                "Off"
+            };
+            (name, model, serial, part, led.to_string())
+        } else {
+            (
+                chassis_id.clone(),
+                "Unknown".to_string(),
+                "Unknown".to_string(),
+                "Unknown".to_string(),
+                "Off".to_string(),
+            )
+        };
+
     Ok(Json(json!({
         "@odata.type": "#Chassis.v1_23_0.Chassis",
-        "@odata.id": "/redfish/v1/Chassis/chassis",
-        "Id": "chassis",
-        "Name": "Chassis",
+        "@odata.id": format!("/redfish/v1/Chassis/{}", chassis_id),
+        "Id": chassis_id,
+        "Name": chassis_name,
         "ChassisType": "RackMount",
         "Manufacturer": "OpenBMC",
-        "Model": "Unknown",
-        "SerialNumber": "Unknown",
-        "PartNumber": "Unknown",
+        "Model": chassis_model,
+        "SerialNumber": chassis_serial,
+        "PartNumber": chassis_part,
         "Status": {
             "State": "Enabled",
             "Health": "OK",
             "HealthRollup": "OK"
         },
-        "IndicatorLED": "Off",
+        "IndicatorLED": chassis_led,
         "PowerState": "On",
         "Links": {
             "ComputerSystems": [{ "@odata.id": "/redfish/v1/Systems/system" }],
             "ManagedBy": [{ "@odata.id": "/redfish/v1/Managers/bmc" }]
         },
-        "Power": { "@odata.id": "/redfish/v1/Chassis/chassis/Power" },
-        "Thermal": { "@odata.id": "/redfish/v1/Chassis/chassis/Thermal" },
-        "Sensors": { "@odata.id": "/redfish/v1/Chassis/chassis/Sensors" },
-        "NetworkAdapters": { "@odata.id": "/redfish/v1/Chassis/chassis/NetworkAdapters" },
-        "PCIeDevices": { "@odata.id": "/redfish/v1/Chassis/chassis/PCIeDevices" },
-        "Assembly": { "@odata.id": "/redfish/v1/Chassis/chassis/Assembly" }
+        "Power": { "@odata.id": format!("/redfish/v1/Chassis/{}/Power", chassis_id) },
+        "Thermal": { "@odata.id": format!("/redfish/v1/Chassis/{}/Thermal", chassis_id) },
+        "Sensors": { "@odata.id": format!("/redfish/v1/Chassis/{}/Sensors", chassis_id) },
+        "NetworkAdapters": { "@odata.id": format!("/redfish/v1/Chassis/{}/NetworkAdapters", chassis_id) },
+        "PCIeDevices": { "@odata.id": format!("/redfish/v1/Chassis/{}/PCIeDevices", chassis_id) },
+        "Assembly": { "@odata.id": format!("/redfish/v1/Chassis/{}/Assembly", chassis_id) }
     })))
+}
+
+/// PATCH /redfish/v1/Chassis/{chassis_id}
+///
+/// Supports setting the IndicatorLED state.
+///
+/// OpenBMC DBus:
+///   /xyz/openbmc_project/led/groups/front_id
+///   interface: xyz.openbmc_project.Led.Group
+///   property: Asserted (bool) — true = LED on
+pub async fn patch_chassis(
+    State(state): State<Arc<AppState>>,
+    Path(chassis_id): Path<String>,
+    JsonBody(body): JsonBody<Value>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!("PATCH /redfish/v1/Chassis/{}", chassis_id);
+    validate_chassis_id(&chassis_id)?;
+
+    if let Some(led_state) = body.get("IndicatorLED").and_then(|v| v.as_str()) {
+        let asserted = led_state == "Blinking" || led_state == "Lit";
+        if let Some(conn) = state.dbus_connection.as_deref() {
+            let client = ZBusClient::from_connection(conn.clone());
+            if let Err(e) = client
+                .set_property(
+                    "/xyz/openbmc_project/led/groups/front_id",
+                    "xyz.openbmc_project.Led.Group",
+                    "Asserted",
+                    serde_json::json!(asserted),
+                )
+                .await
+            {
+                warn!("Failed to set LED state via DBus: {}", e);
+            } else {
+                use tracing::info;
+                info!("IndicatorLED set to '{}' via DBus (Asserted={})", led_state, asserted);
+            }
+        }
+    }
+
+    get_chassis(State(state), Path(chassis_id)).await
 }
 
 // ---------------------------------------------------------------------------
