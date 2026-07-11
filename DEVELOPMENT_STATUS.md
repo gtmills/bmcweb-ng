@@ -3,7 +3,7 @@
 ## Overview
 This document tracks the development progress of bmcweb-ng, a Rust rewrite of the OpenBMC bmcweb server.
 
-**Last Updated:** 2026-07-13 (iteration 10)
+**Last Updated:** 2026-07-11
 
 ## Project Structure
 
@@ -133,7 +133,7 @@ bmcweb-ng/
     - Service file with security hardening (NoNewPrivileges, PrivateTmp, etc.)
     - Socket activation support
 
-### ✅ Completed in iteration 1 (DBus wiring — round 1)
+### ✅ Completed DBus wiring — Systems and Managers
 
 1. **Live PowerState** — `GET /Systems/system` reads `CurrentHostState` from DBus
 2. **Live FirmwareVersion** — `GET /Managers/bmc` reads `Version` from BMC image object
@@ -146,7 +146,7 @@ bmcweb-ng/
 9. **DBus chassis enumeration** — `GET /Chassis` and `GET /Chassis/{id}` enumerate from inventory
 10. **Processor + Memory instances** — `GET /Systems/system/Processors/{id}` and `/Memory/{id}` with DBus data
 
-### ✅ Completed in iterations 7-10 (DBus wiring — rounds 7-10)
+### ✅ Completed DBus wiring — Chassis inventory and power
 
 1. **FirmwareInventory from DBus** — `GET /UpdateService/FirmwareInventory` enumerates live software objects from `xyz.openbmc_project.Software.BMC.Updater` via `GetManagedObjects`; deduplicates with in-memory firmware
 2. **System AssetTag/SerialNumber/Model from DBus** — `GET /Systems/system` reads `AssetTag` from `Inventory.Decorator.AssetTag`, and `SerialNumber`, `PartNumber`, `Model` from `Inventory.Decorator.Asset` on the chassis inventory object
@@ -156,14 +156,13 @@ bmcweb-ng/
 6. **PowerControl total wattage** — `PowerConsumedWatts` on `GET /Chassis/{id}/Power` reads live value from `/sensors/power/total_power`
 7. **Dynamic @odata.id** — Chassis sub-resource links now use the dynamic `chassis_id` rather than hard-coded `"chassis"`
 
-### ✅ Completed in iteration 4 (DBus wiring — round 4)
+### ✅ Completed DBus wiring — Storage, EthernetInterface, boot
 
 1. **Storage collection from DBus** — `GET /Systems/system/Storage` enumerates `Inventory.Item.StorageController` objects; synthesises a "Storage/1" entry if only `Item.Drive` objects are present
 2. **PATCH EthernetInterface** — `PATCH /Managers/bmc/EthernetInterfaces/{nic_id}` handles `DHCPv4.DHCPEnabled`, `MACAddress`, `IPv4StaticAddresses` via `set_property` and `call_method`
 3. **Dynamic NIC validation** — `GET /Managers/bmc/EthernetInterfaces/{nic_id}` validates NIC id against live DBus NIC list instead of hard-coded `eth0`
-4. **Extended test suite** — Round 3 checks added to `qemu_test_v3.sh`: boot target validity, EventLog/Entries type + Members, PATCH /Systems/system, PATCH NetworkProtocol
 
-### ✅ Completed in iteration 3 (DBus wiring — round 3)
+### ✅ Completed DBus wiring — Boot override, EventLog, NetworkProtocol
 
 1. **Boot override settings from DBus** — `GET /Systems/system` now returns live `BootSourceOverrideTarget/Enabled/Mode` from `xyz.openbmc_project.Control.Boot.Source` at `/control/host0/boot` and `/control/host0/boot/one_time`
 2. **PATCH /Systems/system** — Sets `BootSource` and one-time boot via `set_property`; returns updated resource
@@ -172,7 +171,7 @@ bmcweb-ng/
 5. **ClearLog action** — `POST /EventLog/Actions/LogService.ClearLog` calls `DeleteAll` on logging service
 6. **PATCH NetworkProtocol fully wired** — `HostName` and `NTP.NTPServers` applied via `set_property` on `Network.SystemConfiguration`
 
-### ✅ Completed in iteration 2 (DBus wiring — round 2)
+### ✅ Completed DBus wiring — AccountService, sensors, resets, NIC enumeration
 
 1. **AccountService full DBus wiring** — `GET /AccountService/Accounts` lists real users via `ListUsers`; `GET /Accounts/{id}` fetches live user info via `GetUserInfo`; `POST /Accounts` calls `CreateUser`; `PATCH /Accounts/{id}` writes `UserPrivilege`/`UserEnabled` via `set_property`; `DELETE /Accounts/{id}` calls `DeleteUser`
 2. **Chassis Power sensors** — `GET /Chassis/{id}/Power` enumerates power-supply and voltage sensors from DBus inventory + `xyz.openbmc_project.Sensor` paths
@@ -262,7 +261,7 @@ bmcweb-ng/
 ### Performance Measurements (QEMU, July 2026)
 
 Measured on OpenBMC `qemuarm` (emulated Cortex-A15, 256 MB RAM). Binary:
-`bmcwebd-ng v0.1.0`, `opt-level="z"`, LTO, stripped, `arm-unknown-linux-gnueabihf`.
+`bmcwebd-ng v0.2.0`, `opt-level="z"`, LTO, stripped, `arm-unknown-linux-gnueabihf`.
 
 | Metric | Target | Measured | Status |
 |--------|--------|----------|--------|
@@ -297,10 +296,10 @@ Measured on OpenBMC `qemuarm` (emulated Cortex-A15, 256 MB RAM). Binary:
 - [x] Persistent UUID storage
 - [x] RBAC privilege system
 
-### Phase 3: DBus Integration (In Progress)
+### Phase 3: DBus Integration ✅ Complete
 - [x] Wire ZBusClient to Redfish resource handlers
 - [x] Power state from xyz.openbmc_project.State.Host
-- [ ] Boot settings from xyz.openbmc_project.Control.Boot
+- [x] Boot settings from xyz.openbmc_project.Control.Boot
 - [x] Processor/DIMM inventory from xyz.openbmc_project.Inventory
 - [x] Sensor data from xyz.openbmc_project.Sensor.Value
 - [x] Firmware version from xyz.openbmc_project.Software.Version

@@ -520,7 +520,7 @@ All inputs are validated:
 ### Performance Targets
 
 Measured on OpenBMC `qemuarm` (emulated Cortex-A15, 256 MB RAM, 4 vCPUs) — July 2026.
-All tests run against the ARM release binary (`bmcwebd-ng v0.1.0`, `opt-level="z"`, LTO, stripped).
+All tests run against the ARM release binary (`bmcwebd-ng v0.2.0`, `opt-level="z"`, LTO, stripped).
 
 | Metric | Target | Measured | Status | Notes |
 |--------|--------|----------|--------|-------|

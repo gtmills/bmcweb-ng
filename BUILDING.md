@@ -1,6 +1,6 @@
 # Building bmcweb-ng
 
-This guide provides detailed instructions for building bmcweb-ng from source.
+This guide covers everything needed to build, install, and cross-compile bmcweb-ng.
 
 ## Table of Contents
 
@@ -8,15 +8,29 @@ This guide provides detailed instructions for building bmcweb-ng from source.
 - [Quick Start](#quick-start)
 - [Platform-Specific Instructions](#platform-specific-instructions)
 - [Build Configurations](#build-configurations)
+- [Build Features](#build-features)
 - [Cross-Compilation](#cross-compilation)
+- [Installation](#installation)
+- [Development Workflow](#development-workflow)
 - [Docker Build](#docker-build)
+- [Build Verification](#build-verification)
 - [Troubleshooting](#troubleshooting)
+- [Build Environment Variables](#build-environment-variables)
+- [CI/CD Integration](#cicd-integration)
+- [Performance Optimization](#performance-optimization)
 
 ## Prerequisites
 
-### Required
+### System Requirements
 
-- **Rust**: 1.75 or later
+- **Operating System**: Linux (Ubuntu 22.04+, Fedora 38+, Arch, or similar)
+- **Architecture**: x86_64 or ARM64 for building; cross-compiles to ARM32
+- **Memory**: 2 GB RAM minimum for building
+- **Disk Space**: 1 GB free space
+
+### Required Software
+
+- **Rust**: 1.75 or later (install via [rustup](https://rustup.rs/))
 - **Cargo**: Comes with Rust
 - **C Compiler**: GCC or Clang
 - **pkg-config**: For finding system libraries
@@ -25,7 +39,7 @@ This guide provides detailed instructions for building bmcweb-ng from source.
 
 - **OpenSSL**: 3.0+ (for TLS support)
 - **DBus**: 1.12+ (for OpenBMC communication)
-- **PAM**: For authentication (Linux only)
+- **PAM**: For authentication (Linux only; optional — see [Feature Flags](#feature-flags))
 
 ## Quick Start
 
@@ -60,7 +74,8 @@ sudo apt-get install -y \
     pkg-config \
     libssl-dev \
     libdbus-1-dev \
-    libpam0g-dev
+    libpam0g-dev \
+    libsystemd-dev
 
 # Build
 cargo build --release
@@ -76,10 +91,32 @@ source $HOME/.cargo/env
 # Install system dependencies
 sudo dnf install -y \
     gcc \
+    gcc-c++ \
     pkg-config \
     openssl-devel \
     dbus-devel \
-    pam-devel
+    pam-devel \
+    systemd-devel
+
+# Build
+cargo build --release
+```
+
+### Arch Linux
+
+```bash
+# Install Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source $HOME/.cargo/env
+
+# Install system dependencies
+sudo pacman -S \
+    base-devel \
+    pkg-config \
+    openssl \
+    pam \
+    dbus \
+    systemd
 
 # Build
 cargo build --release
@@ -102,16 +139,34 @@ do_install() {
 }
 ```
 
+The Yocto BitBake recipe is located at:
+
+```
+meta-phosphor/recipes-phosphor/interfaces/bmcweb-ng_git.bb
+```
+
+To build with Yocto:
+
+```bash
+# In your OpenBMC build directory
+bitbake bmcweb-ng
+
+# Clean and rebuild
+bitbake -c clean bmcweb-ng && bitbake bmcweb-ng
+
+# Deploy to target
+bitbake bmcweb-ng -c deploy
+```
+
 ### WSL2 (Windows Subsystem for Linux)
 
 ```bash
-# Use Ubuntu/Debian instructions above
-# WSL2 provides a full Linux environment
+# Use Ubuntu/Debian instructions above.
+# WSL2 provides a full Linux environment.
 
 # Install WSL2 if not already installed (PowerShell as Admin):
 # wsl --install -d Ubuntu
-
-# Then follow Ubuntu instructions
+# Then open Ubuntu and follow the Ubuntu instructions above.
 ```
 
 ### macOS
@@ -127,8 +182,8 @@ brew install pkg-config openssl dbus
 # Set environment variables for OpenSSL
 export PKG_CONFIG_PATH="/usr/local/opt/openssl/lib/pkgconfig"
 
-# Build (note: PAM support may be limited on macOS)
-cargo build --release
+# Build without PAM (macOS does not have libpam in the same location)
+cargo build --release --no-default-features
 ```
 
 ## Build Configurations
@@ -140,7 +195,7 @@ cargo build --release
 cargo build
 
 # Binary location: target/debug/bmcwebd-ng
-# Size: ~50-100MB (with debug symbols)
+# Size: ~50–100 MB (with debug symbols)
 ```
 
 ### Release Build
@@ -155,21 +210,20 @@ cargo build --release
 
 ### Minimum Size Build
 
+The `Cargo.toml` release profile already sets `opt-level = "z"` and strips symbols.
+You can squeeze a bit more by stripping manually after build:
+
 ```bash
-# Optimize for binary size (opt-level = "z" is already set in Cargo.toml release profile)
 cargo build --release
-
-# Further reduce size by stripping symbols
 strip target/release/bmcwebd-ng
-
-# Expected size: ~4-5 MB (dynamically-linked); ~3-4 MB with musl static target
+# Expected size: ~4–5 MB (dynamically-linked); ~3–4 MB with musl static target
 ```
 
 ### Development Build with Fast Compilation
 
 ```bash
 # Use mold linker for faster linking (Linux only)
-sudo apt-get install mold  # or: cargo install mold
+sudo apt-get install mold
 
 # Add to .cargo/config.toml:
 # [target.x86_64-unknown-linux-gnu]
@@ -186,47 +240,60 @@ cargo build
 bmcweb-ng has one conditional feature flag:
 
 ```bash
-# Build with PAM authentication (default)
+# Build with PAM authentication enabled (Linux production default)
+cargo build --release --features pam
+
+# Build without PAM — auth stubs accept all logins
+# (used for QEMU/ARM cross-compilation where a PAM ARM sysroot is unavailable)
 cargo build --release
 
-# Build without PAM (useful for non-Linux/test environments)
-cargo build --release --no-default-features
-
 # Available features:
-# - pam: PAM-based authentication (default, Linux only)
+# - pam: real PAM-based authentication (requires libpam headers at build time)
 ```
+
+> **Note**: `pam` is **not** in the `default` feature set so that
+> `cargo build --release --target arm-unknown-linux-gnueabihf` works without
+> an ARM PAM sysroot. Enable it explicitly for production Linux x86_64 builds.
 
 ### Build Profiles
 
-Custom build profiles in `Cargo.toml`:
+The release profile is already tuned for size in `Cargo.toml`:
 
 ```toml
 [profile.release]
-opt-level = "z"          # Optimize for size
-lto = true               # Link-time optimization
-codegen-units = 1        # Better optimization
-strip = true             # Strip symbols
-panic = "abort"          # Smaller binary
-
-[profile.dev]
-opt-level = 0            # No optimization
-debug = true             # Include debug info
-
-[profile.bench]
-inherits = "release"
-debug = true             # Keep debug info for profiling
+opt-level = "z"      # Optimize for size
+lto = true           # Link-time optimization
+codegen-units = 1    # Better optimization
+strip = true         # Strip symbols
+panic = "abort"      # Smaller binary
 ```
 
 ## Cross-Compilation
 
-### ARM64 (aarch64)
+### ARM32 (arm-unknown-linux-gnueabihf) — Primary OpenBMC Target
+
+This is the required target for OpenBMC `qemuarm` and production AST2600/AST2700 hardware.
+The repository's `.cargo/config.toml` already configures the linker for this target.
+
+```bash
+# Install cross-compilation toolchain
+rustup target add arm-unknown-linux-gnueabihf
+sudo apt-get install gcc-arm-linux-gnueabihf
+
+# Build (pam is omitted — no ARM PAM sysroot needed)
+cargo build --release --target arm-unknown-linux-gnueabihf
+
+# Binary location: target/arm-unknown-linux-gnueabihf/release/bmcwebd-ng
+```
+
+### ARM64 (aarch64-unknown-linux-gnu)
 
 ```bash
 # Install cross-compilation toolchain
 rustup target add aarch64-unknown-linux-gnu
 sudo apt-get install gcc-aarch64-linux-gnu
 
-# Configure Cargo for cross-compilation
+# Configure Cargo for cross-compilation (if not already set)
 cat >> ~/.cargo/config.toml << EOF
 [target.aarch64-unknown-linux-gnu]
 linker = "aarch64-linux-gnu-gcc"
@@ -238,35 +305,133 @@ cargo build --release --target aarch64-unknown-linux-gnu
 # Binary location: target/aarch64-unknown-linux-gnu/release/bmcwebd-ng
 ```
 
-### ARM32 (arm-unknown-linux-gnueabihf)
-
-This is the primary target for OpenBMC `qemuarm` and AST2600/AST2700 hardware.
-The `.cargo/config.toml` already configures the linker for this target.
+### Using `cross` (Docker-based)
 
 ```bash
-# Install cross-compilation toolchain
-rustup target add arm-unknown-linux-gnueabihf
-sudo apt-get install gcc-arm-linux-gnueabihf
-
-# Build (no extra --features flags needed; omit --features pam when cross-compiling
-# if the PAM headers are not in the sysroot)
-cargo build --release --target arm-unknown-linux-gnueabihf
-```
-
-### Using cross
-
-```bash
-# Install cross (Docker-based cross-compilation)
+# Install cross
 cargo install cross
-
-# Build for ARM64
-cross build --release --target aarch64-unknown-linux-gnu
 
 # Build for ARM32 (OpenBMC target)
 cross build --release --target arm-unknown-linux-gnueabihf
 
+# Build for ARM64
+cross build --release --target aarch64-unknown-linux-gnu
+
 # Build for RISC-V
 cross build --release --target riscv64gc-unknown-linux-gnu
+```
+
+## Installation
+
+### System-wide Installation
+
+```bash
+# Build release binary
+cargo build --release
+
+# Install binary
+sudo install -m 755 target/release/bmcwebd-ng /usr/bin/
+
+# Create service user and groups
+sudo useradd -r -s /sbin/nologin bmcweb-ng
+sudo groupadd -r web
+sudo groupadd -r redfish
+sudo groupadd -r hostconsole
+sudo usermod -a -G web,redfish,hostconsole bmcweb-ng
+
+# Create directories
+sudo mkdir -p /etc/bmcweb /var/lib/bmcweb /var/log/bmcweb
+sudo chown bmcweb-ng:bmcweb-ng /var/lib/bmcweb /var/log/bmcweb
+
+# Install configuration and systemd files
+sudo install -m 644 config.toml /etc/bmcweb/
+sudo install -m 644 bmcweb-ng.service /etc/systemd/system/
+sudo install -m 644 bmcweb-ng.socket  /etc/systemd/system/
+
+# Enable and start service
+sudo systemctl daemon-reload
+sudo systemctl enable --now bmcweb-ng.socket
+
+# Check status
+sudo systemctl status bmcweb-ng.socket bmcweb-ng.service
+```
+
+### Verify Installation
+
+```bash
+# Check service is active
+systemctl is-active bmcweb-ng.service
+
+# Follow logs
+journalctl -u bmcweb-ng.service -f
+
+# Test endpoints
+curl http://localhost/health
+curl -u root:0penBmc http://localhost/redfish/v1
+```
+
+## Development Workflow
+
+### Iterative Development
+
+```bash
+# Format code
+cargo fmt
+
+# Lint
+cargo clippy -- -D warnings
+
+# Run tests
+cargo test
+
+# Run tests with output
+cargo test -- --nocapture
+```
+
+### Auto-Rebuild on File Changes
+
+```bash
+# Install cargo-watch
+cargo install cargo-watch
+
+# Auto-rebuild and run on file changes
+cargo watch -x run
+
+# Auto-test on file changes
+cargo watch -x test
+```
+
+### Debugging
+
+```bash
+# Build with debug symbols
+cargo build
+
+# Run with GDB
+rust-gdb target/debug/bmcwebd-ng
+
+# Run with LLDB
+rust-lldb target/debug/bmcwebd-ng
+
+# Enable backtrace on panic
+RUST_BACKTRACE=1 cargo run
+RUST_BACKTRACE=full cargo run
+```
+
+### Logging
+
+```bash
+# Info-level logging (default)
+RUST_LOG=info cargo run
+
+# Debug-level logging
+RUST_LOG=debug cargo run
+
+# Trace-level (very verbose)
+RUST_LOG=trace cargo run
+
+# Per-module filtering
+RUST_LOG=bmcweb_ng::dbus=debug,bmcweb_ng::auth=info cargo run
 ```
 
 ## Docker Build
@@ -274,57 +439,35 @@ cross build --release --target riscv64gc-unknown-linux-gnu
 ### Build Container
 
 ```dockerfile
-# Dockerfile
 FROM rust:1.75-slim as builder
 
-# Install dependencies
 RUN apt-get update && apt-get install -y \
-    pkg-config \
-    libssl-dev \
-    libdbus-1-dev \
-    libpam0g-dev \
+    pkg-config libssl-dev libdbus-1-dev libpam0g-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Set working directory
 WORKDIR /build
-
-# Copy source
 COPY . .
-
-# Build
-RUN cargo build --release
+RUN cargo build --release --features pam
 
 # Runtime container
 FROM debian:bookworm-slim
 
-# Install runtime dependencies
 RUN apt-get update && apt-get install -y \
-    libssl3 \
-    libdbus-1-3 \
-    libpam0g \
-    ca-certificates \
+    libssl3 libdbus-1-3 libpam0g ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy binary
 COPY --from=builder /build/target/release/bmcwebd-ng /usr/local/bin/
-
-# Copy config
 COPY config.toml /etc/bmcweb/config.toml
 
-# Expose ports
 EXPOSE 443 9090
-
-# Run
 CMD ["bmcwebd-ng", "--config", "/etc/bmcweb/config.toml"]
 ```
 
 ### Build and Run
 
 ```bash
-# Build Docker image
 docker build -t bmcweb-ng:latest .
 
-# Run container
 docker run -d \
     --name bmcweb-ng \
     -p 443:443 \
@@ -338,33 +481,43 @@ docker run -d \
 ### Run Tests
 
 ```bash
-# Run all tests
+# Run all unit tests
 cargo test
 
 # Run tests with output
 cargo test -- --nocapture
 
-# Run specific test
+# Run a specific test
 cargo test test_service_root
 
-# Run integration tests
+# Run all integration tests
 cargo test --test '*'
-
-# Run benchmarks
-cargo bench
 ```
 
 ### Check Code Quality
 
 ```bash
-# Run clippy (linter)
+# Linter
 cargo clippy -- -D warnings
 
-# Check formatting
+# Formatting check
 cargo fmt --check
 
 # Generate documentation
 cargo doc --no-deps --open
+```
+
+### Benchmarks
+
+```bash
+# Install cargo-criterion
+cargo install cargo-criterion
+
+# Run benchmarks
+cargo bench
+
+# Generate benchmark report
+cargo criterion --message-format=json > benchmark.json
 ```
 
 ### Verify Binary
@@ -373,98 +526,107 @@ cargo doc --no-deps --open
 # Check binary size
 ls -lh target/release/bmcwebd-ng
 
-# Check dependencies
+# Check runtime library dependencies
 ldd target/release/bmcwebd-ng
 
-# Run binary
+# Smoke-test the binary
 ./target/release/bmcwebd-ng --version
 ./target/release/bmcwebd-ng --help
 ```
 
 ## Troubleshooting
 
-### OpenSSL Not Found
+### Build Errors
 
+#### `error: linker 'cc' not found`
 ```bash
-# Ubuntu/Debian
-sudo apt-get install libssl-dev pkg-config
-
-# Fedora/RHEL
-sudo dnf install openssl-devel pkg-config
-
-# macOS
-brew install openssl pkg-config
-export PKG_CONFIG_PATH="/usr/local/opt/openssl/lib/pkgconfig"
+sudo apt-get install build-essential       # Ubuntu/Debian
+sudo dnf install gcc gcc-c++              # Fedora/RHEL
 ```
 
-### DBus Not Found
-
+#### `error: failed to run custom build command for 'openssl-sys'`
 ```bash
-# Ubuntu/Debian
-sudo apt-get install libdbus-1-dev
-
-# Fedora/RHEL
-sudo dnf install dbus-devel
+sudo apt-get install libssl-dev pkg-config    # Ubuntu/Debian
+sudo dnf install openssl-devel pkg-config     # Fedora/RHEL
+brew install openssl pkg-config               # macOS
+export PKG_CONFIG_PATH="/usr/local/opt/openssl/lib/pkgconfig"  # macOS
 ```
 
-### PAM Not Found
-
+#### `error: failed to run custom build command for 'pam-sys'`
 ```bash
-# Ubuntu/Debian
-sudo apt-get install libpam0g-dev
-
-# Fedora/RHEL
-sudo dnf install pam-devel
+# Either install libpam headers, or build without the pam feature:
+sudo apt-get install libpam0g-dev    # Ubuntu/Debian
+sudo dnf install pam-devel           # Fedora/RHEL
+# -- OR --
+cargo build --release                # (pam feature is off by default)
 ```
 
-### Linker Errors
-
+#### `error: failed to run custom build command for 'zbus'`
 ```bash
-# Install build essentials
-sudo apt-get install build-essential
-
-# Or specify linker explicitly
-export RUSTFLAGS="-C linker=gcc"
-cargo build --release
+sudo apt-get install libdbus-1-dev    # Ubuntu/Debian
+sudo dnf install dbus-devel           # Fedora/RHEL
 ```
 
-### Out of Memory During Build
+### Runtime Errors
 
+#### `Failed to establish DBus connection`
 ```bash
-# Reduce parallel jobs
-cargo build --release -j 2
-
-# Or use less optimization
-cargo build --release --config profile.release.opt-level=2
+systemctl status dbus
+sudo systemctl start dbus
+ls -la /var/run/dbus/system_bus_socket
 ```
 
-### Slow Compilation
-
+#### `Permission denied` when binding to port 443
 ```bash
-# Use sccache for caching
+# Option 1: Use systemd socket activation (recommended)
+sudo systemctl start bmcweb-ng.socket
+
+# Option 2: Grant capability to bind privileged ports
+sudo setcap 'cap_net_bind_service=+ep' target/release/bmcwebd-ng
+
+# Option 3: Run as root (not recommended for production)
+sudo ./target/release/bmcwebd-ng
+```
+
+#### `Address already in use`
+```bash
+sudo lsof -i :443
+sudo lsof -i :80
+sudo systemctl stop apache2   # or nginx, or whatever is conflicting
+```
+
+### Build Performance
+
+#### Out of Memory During Build
+```bash
+cargo build --release -j 2    # Reduce parallel jobs
+```
+
+#### Slow Compilation
+```bash
+# Use sccache for build caching
 cargo install sccache
 export RUSTC_WRAPPER=sccache
 
-# Use mold linker (Linux)
+# Use mold linker (Linux only)
 sudo apt-get install mold
 export RUSTFLAGS="-C link-arg=-fuse-ld=mold"
 
-# Incremental compilation (enabled by default in debug)
+# Incremental compilation (on by default in debug)
 export CARGO_INCREMENTAL=1
 ```
 
-### Cross-Compilation Issues
-
+#### Cross-Compilation Issues
 ```bash
-# Ensure target is installed
+# List installed targets
 rustup target list --installed
 
-# Install missing target
-rustup target add <target-triple>
+# Install a missing target
+rustup target add arm-unknown-linux-gnueabihf
 
-# Use cross for easier cross-compilation
+# Use cross for Docker-based cross-compilation
 cargo install cross
-cross build --target <target-triple>
+cross build --target arm-unknown-linux-gnueabihf
 ```
 
 ## Build Environment Variables
@@ -473,13 +635,13 @@ cross build --target <target-triple>
 # Rust compiler flags
 export RUSTFLAGS="-C target-cpu=native"
 
-# Cargo build jobs
+# Parallelism
 export CARGO_BUILD_JOBS=4
 
-# Enable incremental compilation
+# Incremental compilation
 export CARGO_INCREMENTAL=1
 
-# Use sccache
+# Build cache
 export RUSTC_WRAPPER=sccache
 
 # OpenSSL location (if not in standard path)
@@ -492,7 +654,7 @@ export PKG_CONFIG_PATH="/usr/local/opt/openssl/lib/pkgconfig"
 ### GitHub Actions
 
 ```yaml
-name: Build
+name: Build and Test
 
 on: [push, pull_request]
 
@@ -509,9 +671,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libssl-dev libdbus-1-dev libpam0g-dev
       - name: Build
-        run: cargo build --release
+        run: cargo build --release --features pam
       - name: Test
         run: cargo test
+      - name: Lint
+        run: cargo clippy -- -D warnings
       - name: Upload artifact
         uses: actions/upload-artifact@v3
         with:
@@ -529,7 +693,7 @@ RUSTFLAGS="-Cprofile-generate=/tmp/pgo-data" cargo build --release
 
 # Step 2: Run workload to generate profile data
 ./target/release/bmcwebd-ng --config config.toml &
-# Run typical workload...
+# Run typical workload against the server...
 killall bmcwebd-ng
 
 # Step 3: Merge profile data
@@ -541,10 +705,11 @@ RUSTFLAGS="-Cprofile-use=/tmp/pgo-data/merged.profdata" cargo build --release
 
 ### Link-Time Optimization (LTO)
 
-Already enabled in release profile:
+Already enabled in the release profile:
+
 ```toml
 [profile.release]
-lto = true  # Enable LTO
+lto = true  # Full LTO for maximum optimization
 ```
 
 ## Additional Resources
@@ -553,3 +718,5 @@ lto = true  # Enable LTO
 - [Cargo Book](https://doc.rust-lang.org/cargo/)
 - [Cross-Compilation Guide](https://rust-lang.github.io/rustup/cross-compilation.html)
 - [OpenBMC Development](https://github.com/openbmc/docs)
+- [Tokio Documentation](https://tokio.rs/)
+- [axum Documentation](https://docs.rs/axum/)
