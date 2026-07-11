@@ -3,7 +3,7 @@
 ## Overview
 This document tracks the development progress of bmcweb-ng, a Rust rewrite of the OpenBMC bmcweb server.
 
-**Last Updated:** 2026-07-14
+**Last Updated:** 2026-07-11
 
 ## Project Structure
 
@@ -261,7 +261,7 @@ bmcweb-ng/
 ### Performance Measurements (QEMU, July 2026)
 
 Measured on OpenBMC `qemuarm` (emulated Cortex-A15, 256 MB RAM). Binary:
-`bmcwebd-ng v0.2.0`, `opt-level="z"`, LTO, stripped, `arm-unknown-linux-gnueabihf`.
+`bmcwebd-ng v0.2.1`, `opt-level="z"`, LTO, stripped, `arm-unknown-linux-gnueabihf`.
 
 | Metric | Target | Measured | Status |
 |--------|--------|----------|--------|

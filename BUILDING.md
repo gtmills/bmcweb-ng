@@ -280,7 +280,11 @@ The repository's `.cargo/config.toml` already configures the linker for this tar
 rustup target add arm-unknown-linux-gnueabihf
 sudo apt-get install gcc-arm-linux-gnueabihf
 
-# Build (pam is omitted — no ARM PAM sysroot needed)
+# Build (pam feature omitted — no ARM PAM sysroot needed)
+# Note: the release profile enables full LTO, which requires the linker env var
+# to avoid the host x86_64 LLD being injected by rustc on LTO-linked binaries.
+CC=arm-linux-gnueabihf-gcc \
+CARGO_TARGET_ARM_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc \
 cargo build --release --target arm-unknown-linux-gnueabihf
 
 # Binary location: target/arm-unknown-linux-gnueabihf/release/bmcwebd-ng
@@ -624,7 +628,15 @@ rustup target list --installed
 # Install a missing target
 rustup target add arm-unknown-linux-gnueabihf
 
-# Use cross for Docker-based cross-compilation
+# ARM build fails with "incompatible with elf64-x86-64" linker error
+# This happens when rustc injects the host LLD into the ARM link command
+# (occurs when lto = true in the release profile and a gcc-ld wrapper is
+# installed on the host).  Pass the cross-compiler via env vars:
+CC=arm-linux-gnueabihf-gcc \
+CARGO_TARGET_ARM_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc \
+cargo build --release --target arm-unknown-linux-gnueabihf
+
+# Use cross for Docker-based cross-compilation (avoids the LTO linker issue)
 cargo install cross
 cross build --target arm-unknown-linux-gnueabihf
 ```
