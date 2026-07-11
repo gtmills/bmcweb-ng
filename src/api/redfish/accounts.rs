@@ -1,14 +1,16 @@
 //! Redfish AccountService endpoints
 //!
 //! Implements the Redfish AccountService resource family:
-//! - GET  /redfish/v1/AccountService
-//! - GET  /redfish/v1/AccountService/Accounts
-//! - POST /redfish/v1/AccountService/Accounts
-//! - GET  /redfish/v1/AccountService/Accounts/{account_id}
+//! - GET   /redfish/v1/AccountService
+//! - PATCH /redfish/v1/AccountService
+//! - GET   /redfish/v1/AccountService/Accounts
+//! - POST  /redfish/v1/AccountService/Accounts
+//! - GET   /redfish/v1/AccountService/Accounts/{account_id}
 //! - PATCH /redfish/v1/AccountService/Accounts/{account_id}
 //! - DELETE /redfish/v1/AccountService/Accounts/{account_id}
-//! - GET  /redfish/v1/AccountService/Roles
-//! - GET  /redfish/v1/AccountService/Roles/{role_id}
+//! - GET   /redfish/v1/AccountService/Roles
+//! - GET   /redfish/v1/AccountService/Roles/{role_id}
+//! - GET   /redfish/v1/AccountService/PrivilegeMap
 //!
 //! Reference: DMTF DSP0266, AccountService schema v1.12.0, ManagerAccount schema v1.12.0
 //!
@@ -132,7 +134,34 @@ pub async fn get_account_service(
 ) -> Result<Json<Value>, StatusCode> {
     debug!("GET /redfish/v1/AccountService");
 
-    let _timeout = state.config.auth.session_timeout_seconds;
+    // Read live account policy from DBus if available
+    let (lockout_threshold, lockout_duration) = if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = crate::dbus::ZBusClient::from_connection(conn.clone());
+        let threshold = client
+            .get_property(
+                "/xyz/openbmc_project/user",
+                "xyz.openbmc_project.User.Manager",
+                "MaxLoginAttemptBeforeLockout",
+            )
+            .await
+            .ok()
+            .and_then(|v| v.as_u64())
+            .unwrap_or(5);
+        let duration = client
+            .get_property(
+                "/xyz/openbmc_project/user",
+                "xyz.openbmc_project.User.Manager",
+                "AccountUnlockTimeout",
+            )
+            .await
+            .ok()
+            .and_then(|v| v.as_u64())
+            .unwrap_or(30);
+        (threshold, duration)
+    } else {
+        (5u64, 30u64)
+    };
+
     let response = json!({
         "@odata.type": "#AccountService.v1_12_0.AccountService",
         "@odata.id": "/redfish/v1/AccountService",
@@ -142,9 +171,12 @@ pub async fn get_account_service(
         "ServiceEnabled": true,
         "AuthFailureLoggingThreshold": 3,
         "MinPasswordLength": 8,
-        "AccountLockoutThreshold": 5,
-        "AccountLockoutDuration": 30,
-        "AccountLockoutCounterResetAfter": 30,
+        "AccountLockoutThreshold": lockout_threshold,
+        "AccountLockoutDuration": lockout_duration,
+        "AccountLockoutCounterResetAfter": lockout_duration,
+        "PrivilegeMap": {
+            "@odata.id": "/redfish/v1/AccountService/PrivilegeMap"
+        },
         "Accounts": {
             "@odata.id": "/redfish/v1/AccountService/Accounts"
         },
@@ -165,6 +197,113 @@ pub async fn get_account_service(
     });
 
     Ok(Json(response))
+}
+
+/// PATCH /redfish/v1/AccountService
+///
+/// Allows updating account lockout policy via DBus:
+///   xyz.openbmc_project.User.Manager / MaxLoginAttemptBeforeLockout (u32)
+///   xyz.openbmc_project.User.Manager / AccountUnlockTimeout (u32)
+pub async fn patch_account_service(
+    State(state): State<Arc<AppState>>,
+    JsonBody(body): JsonBody<Value>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!("PATCH /redfish/v1/AccountService");
+
+    if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+
+        if let Some(threshold) = body.get("AccountLockoutThreshold").and_then(|v| v.as_u64()) {
+            if let Err(e) = client
+                .set_property(
+                    "/xyz/openbmc_project/user",
+                    "xyz.openbmc_project.User.Manager",
+                    "MaxLoginAttemptBeforeLockout",
+                    serde_json::json!(threshold),
+                )
+                .await
+            {
+                warn!("Failed to set MaxLoginAttemptBeforeLockout: {}", e);
+            } else {
+                info!("AccountLockoutThreshold set to {} via DBus", threshold);
+            }
+        }
+
+        if let Some(duration) = body.get("AccountLockoutDuration").and_then(|v| v.as_u64()) {
+            if let Err(e) = client
+                .set_property(
+                    "/xyz/openbmc_project/user",
+                    "xyz.openbmc_project.User.Manager",
+                    "AccountUnlockTimeout",
+                    serde_json::json!(duration),
+                )
+                .await
+            {
+                warn!("Failed to set AccountUnlockTimeout: {}", e);
+            } else {
+                info!("AccountLockoutDuration set to {} via DBus", duration);
+            }
+        }
+    }
+
+    get_account_service(State(state)).await
+}
+
+/// GET /redfish/v1/AccountService/PrivilegeMap
+///
+/// Returns the Redfish PrivilegeRegistry that maps resources to required
+/// privileges.  This is a static document — upstream bmcweb serves it from
+/// a bundled JSON file.  We return a minimal well-formed response that
+/// satisfies schema-aware clients.
+pub async fn get_privilege_map(
+    State(_state): State<Arc<AppState>>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!("GET /redfish/v1/AccountService/PrivilegeMap");
+
+    Ok(Json(json!({
+        "@odata.type": "#PrivilegeRegistry.v1_1_4.PrivilegeRegistry",
+        "@odata.id": "/redfish/v1/AccountService/PrivilegeMap",
+        "Id": "PrivilegeMap",
+        "Name": "Privilege Map",
+        "Description": "This resource represents the privilege registry mapping resources to required privileges",
+        "PrivilegesUsed": [
+            "Login",
+            "ConfigureManager",
+            "ConfigureUsers",
+            "ConfigureSelf",
+            "ConfigureComponents"
+        ],
+        "OEMPrivilegesUsed": [],
+        "Mappings": [
+            {
+                "Entity": "Manager",
+                "OperationMap": {
+                    "GET":    [{ "Privilege": ["Login"] }],
+                    "HEAD":   [{ "Privilege": ["Login"] }],
+                    "POST":   [{ "Privilege": ["ConfigureManager"] }],
+                    "PUT":    [{ "Privilege": ["ConfigureManager"] }],
+                    "PATCH":  [{ "Privilege": ["ConfigureManager"] }],
+                    "DELETE": [{ "Privilege": ["ConfigureManager"] }]
+                }
+            },
+            {
+                "Entity": "AccountService",
+                "OperationMap": {
+                    "GET":    [{ "Privilege": ["Login"] }],
+                    "PATCH":  [{ "Privilege": ["ConfigureUsers"] }]
+                }
+            },
+            {
+                "Entity": "ManagerAccount",
+                "OperationMap": {
+                    "GET":    [{ "Privilege": ["Login", "ConfigureSelf"] }],
+                    "POST":   [{ "Privilege": ["ConfigureUsers"] }],
+                    "PATCH":  [{ "Privilege": ["ConfigureUsers", "ConfigureSelf"] }],
+                    "DELETE": [{ "Privilege": ["ConfigureUsers"] }]
+                }
+            }
+        ]
+    })))
 }
 
 // ---------------------------------------------------------------------------

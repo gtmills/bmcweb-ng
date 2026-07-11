@@ -1,6 +1,6 @@
 //! Redfish ServiceRoot endpoint
 //!
-//! Implements /redfish/v1/ endpoint
+//! Implements /redfish/v1/ endpoint and related collection stubs.
 
 use axum::{extract::State, response::Json, http::StatusCode};
 use serde_json::{json, Value};
@@ -91,6 +91,42 @@ pub async fn get_service_root(
     });
 
     Ok(Json(response))
+}
+
+/// GET /redfish/v1/Registries
+///
+/// Returns a stub Redfish Message Registry collection.
+/// OpenBMC's bmcweb serves static JSON files from /usr/share/www/registries/.
+/// We return a minimal collection listing the standard Base registry.
+pub async fn get_registries_collection(
+    State(_state): State<Arc<AppState>>,
+) -> Result<Json<Value>, StatusCode> {
+    Ok(Json(json!({
+        "@odata.type": "#MessageRegistryFileCollection.MessageRegistryFileCollection",
+        "@odata.id": "/redfish/v1/Registries",
+        "Name": "Message Registry File Collection",
+        "Description": "Collection of Redfish Message Registry Files",
+        "Members@odata.count": 1,
+        "Members": [
+            { "@odata.id": "/redfish/v1/Registries/Base" }
+        ]
+    })))
+}
+
+/// GET /redfish/v1/JsonSchemas
+///
+/// Returns a stub Redfish JsonSchema collection.
+pub async fn get_json_schemas_collection(
+    State(_state): State<Arc<AppState>>,
+) -> Result<Json<Value>, StatusCode> {
+    Ok(Json(json!({
+        "@odata.type": "#JsonSchemaFileCollection.JsonSchemaFileCollection",
+        "@odata.id": "/redfish/v1/JsonSchemas",
+        "Name": "JsonSchema File Collection",
+        "Description": "Collection of Redfish JsonSchema Files",
+        "Members@odata.count": 0,
+        "Members": []
+    })))
 }
 
 #[cfg(test)]

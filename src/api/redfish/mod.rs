@@ -95,7 +95,11 @@ pub fn router() -> Router<Arc<AppState>> {
                get(sessions::get_session)
                .delete(sessions::delete_session))
         // AccountService routes
-        .route("/AccountService", get(accounts::get_account_service))
+        .route("/AccountService",
+               get(accounts::get_account_service)
+               .patch(accounts::patch_account_service))
+        .route("/AccountService/PrivilegeMap",
+               get(accounts::get_privilege_map))
         .route("/AccountService/Accounts",
                get(accounts::get_accounts_collection)
                .post(accounts::create_account))
@@ -105,6 +109,9 @@ pub fn router() -> Router<Arc<AppState>> {
                .delete(accounts::delete_account))
         .route("/AccountService/Roles", get(accounts::get_roles_collection))
         .route("/AccountService/Roles/:role_id", get(accounts::get_role))
+        // Registries and JsonSchemas stubs
+        .route("/Registries",    get(service_root::get_registries_collection))
+        .route("/JsonSchemas",   get(service_root::get_json_schemas_collection))
         // EventService routes
         .route("/EventService", get(event_service::get_event_service)
                .patch(event_service::patch_event_service))
