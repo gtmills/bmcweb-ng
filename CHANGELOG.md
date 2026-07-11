@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Chassis live inventory from DBus** (`chassis.rs`) —
+  `GET /Chassis/{id}` reads `Name`, `Model`, `SerialNumber`, `PartNumber` from
+  `xyz.openbmc_project.Inventory.Decorator.Asset` and `Inventory.Item.PrettyName`.
+  `IndicatorLED` reads from `xyz.openbmc_project.Led.Physical.State`.
+  All `@odata.id` sub-resource links now use the dynamic `chassis_id`.
+
+- **PATCH /Chassis/{id} IndicatorLED** (`chassis.rs`) —
+  `PATCH /Chassis/{id}` writes `Asserted` (bool) on
+  `xyz.openbmc_project.Led.Group` at `/xyz/openbmc_project/led/groups/front_id`.
+
+- **PowerControl total wattage** (`chassis.rs`) —
+  `PowerConsumedWatts` in the `PowerControl` array reads live value from
+  `/xyz/openbmc_project/sensors/power/total_power` via `get_property`.
+
+- **System AssetTag/SerialNumber/Model from DBus** (`systems.rs`) —
+  `GET /Systems/system` reads `AssetTag` from `Inventory.Decorator.AssetTag`,
+  and `SerialNumber`, `PartNumber`, `Model` from `Inventory.Decorator.Asset`.
+  `PATCH /Systems/system` applies `AssetTag` changes via `set_property`.
+
+- **FirmwareInventory enriched from DBus** (`update_service.rs`) —
+  `GET /UpdateService/FirmwareInventory` enumerates live software images from
+  `xyz.openbmc_project.Software.BMC.Updater` using `GetManagedObjects`.
+  Results are deduplicated with the in-memory firmware list from upload operations.
+
+
 - **Storage collection from DBus** (`systems.rs`) —
   `GET /Systems/system/Storage` now enumerates storage controller objects via
   `GetManagedObjects` filtering on `Inventory.Item.StorageController`.

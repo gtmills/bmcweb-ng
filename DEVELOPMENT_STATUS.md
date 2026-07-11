@@ -3,7 +3,7 @@
 ## Overview
 This document tracks the development progress of bmcweb-ng, a Rust rewrite of the OpenBMC bmcweb server.
 
-**Last Updated:** 2026-07-13 (iteration 3)
+**Last Updated:** 2026-07-13 (iteration 10)
 
 ## Project Structure
 
@@ -144,6 +144,16 @@ bmcweb-ng/
 9. **DBus chassis enumeration** — `GET /Chassis` and `GET /Chassis/{id}` enumerate from inventory
 10. **Processor + Memory instances** — `GET /Systems/system/Processors/{id}` and `/Memory/{id}` with DBus data
 
+### ✅ Completed in iterations 7-10 (DBus wiring — rounds 7-10)
+
+1. **FirmwareInventory from DBus** — `GET /UpdateService/FirmwareInventory` enumerates live software objects from `xyz.openbmc_project.Software.BMC.Updater` via `GetManagedObjects`; deduplicates with in-memory firmware
+2. **System AssetTag/SerialNumber/Model from DBus** — `GET /Systems/system` reads `AssetTag` from `Inventory.Decorator.AssetTag`, and `SerialNumber`, `PartNumber`, `Model` from `Inventory.Decorator.Asset` on the chassis inventory object
+3. **PATCH /Systems/system AssetTag** — Writes `AssetTag` via `set_property` on `xyz.openbmc_project.Inventory.Decorator.AssetTag`
+4. **Chassis live data from DBus** — `GET /Chassis/{id}` reads `Name`, `Model`, `SerialNumber`, `PartNumber` and `IndicatorLED` from DBus inventory and LED physical state
+5. **PATCH /Chassis/{id} IndicatorLED** — Writes `Asserted` bool on `xyz.openbmc_project.Led.Group` at `/led/groups/front_id`
+6. **PowerControl total wattage** — `PowerConsumedWatts` on `GET /Chassis/{id}/Power` reads live value from `/sensors/power/total_power`
+7. **Dynamic @odata.id** — Chassis sub-resource links now use the dynamic `chassis_id` rather than hard-coded `"chassis"`
+
 ### ✅ Completed in iteration 4 (DBus wiring — round 4)
 
 1. **Storage collection from DBus** — `GET /Systems/system/Storage` enumerates `Inventory.Item.StorageController` objects; synthesises a "Storage/1" entry if only `Item.Drive` objects are present
@@ -222,17 +232,21 @@ bmcweb-ng/
 | Feature | bmcweb | bmcweb-ng | Notes |
 |---------|--------|-----------|-------|
 | Redfish ServiceRoot | ✅ | ✅ | v1.17.0 compliant |
-| Redfish Systems | ✅ | ✅ | Collection + instance + live PowerState; Reset via DBus |
+| Redfish Systems | ✅ | ✅ | GET+PATCH, live PowerState/Boot/AssetTag/SerialNumber; Reset via DBus |
 | Redfish Systems/Processors | ✅ | ✅ | Collection + individual instance from DBus inventory |
 | Redfish Systems/Memory | ✅ | ✅ | Collection + individual instance from DBus inventory |
-| Redfish Systems/LogServices | ✅ | ✅ | Collection + EventLog instance endpoint |
-| Redfish Chassis | ✅ | ✅ | Collection from DBus + Power/Thermal/Sensors live data |
-| Redfish Managers | ✅ | ✅ | Live FirmwareVersion, hostname, NTP, NIC list + MAC/IP from DBus; Reset via DBus |
+| Redfish Systems/Storage | ✅ | ✅ | Collection enumerated from Inventory.Item.StorageController |
+| Redfish Systems/LogServices | ✅ | ✅ | EventLog instance + Entries collection + ClearLog |
+| Redfish Chassis | ✅ | ✅ | GET+PATCH, live name/model/serial/LED; Power/Thermal/Sensors |
+| Redfish Managers | ✅ | ✅ | GET+PATCH NIC; live FirmwareVersion/hostname/NTP; Reset via DBus |
 | SessionService | ✅ | ✅ | Full login flow, X-Auth-Token, role fetched from DBus |
-| AccountService | ✅ | ✅ | Full CRUD: list/get/create/patch/delete via DBus User.Manager |
+| AccountService | ✅ | ✅ | Full CRUD + PATCH lockout policy + PrivilegeMap |
 | EventService | ✅ | ✅ | Subscriptions + SubmitTestEvent |
 | TaskService | ✅ | ✅ | Collection + instance management |
-| UpdateService | ✅ | ✅ | FirmwareInventory + SimpleUpdate |
+| UpdateService | ✅ | ✅ | FirmwareInventory from DBus + SimpleUpdate |
+| CertificateService | ✅ | ✅ | GET + CertificateLocations |
+| TelemetryService | ✅ | ✅ | GET + MetricDefinitions/Reports/ReportDefinitions |
+| Registries/JsonSchemas | ✅ | ✅ | Collection stubs |
 | DBus set_property | ✅ | ✅ | String/bool/int/float/string-array types |
 | DBus REST API | ✅ | ❌ | TODO |
 | KVM WebSocket | ✅ | ⚠️ | Stub |
@@ -299,6 +313,13 @@ Measured on OpenBMC `qemuarm` (emulated Cortex-A15, 256 MB RAM). Binary:
 - [x] Boot settings (xyz.openbmc_project.Control.Boot.Source — GET + PATCH)
 - [x] Log entries (EventLog/Entries + instance + ClearLog via DBus)
 - [x] PATCH NetworkProtocol (HostName + NTPServers via set_property)
+- [x] Chassis LED (xyz.openbmc_project.Led.Group/Physical — GET + PATCH)
+- [x] Chassis live inventory (AssetTag, SerialNumber, Model, PartNumber)
+- [x] FirmwareInventory from DBus (xyz.openbmc_project.Software.Version)
+- [x] Storage collection (Inventory.Item.StorageController enumeration)
+- [x] PATCH EthernetInterface (DHCPEnabled, MACAddress, static IPs)
+- [x] AccountService lockout policy from DBus (MaxLoginAttemptBeforeLockout)
+- [x] CertificateService + TelemetryService endpoints
 
 ### Phase 4: Advanced Features
 - [ ] WebSocket KVM (RFB protocol)
