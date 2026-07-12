@@ -3,7 +3,7 @@
 //! Provides WebSocket endpoints matching those in upstream bmcweb:
 //!
 //! - `/console0`   — Host serial console (connects to host UART via DBus)
-//! - `/kvm/0`      — KVM / Remote Frame Buffer (planned)
+//! - `/kvm/0`      — KVM / Remote Frame Buffer (TCP proxy to kvmd on port 5900)
 //! - `/vm/0/0`     — Virtual Media (planned)
 //! - `/nbd/0`      — NBD virtual media (planned)
 //! - `/redfish/events` — Server-Sent Events for Redfish EventService (see event_service.rs)
@@ -16,6 +16,15 @@
 //! via a UNIX domain socket at `/run/obmc-console/`.  We implement the
 //! same socket path convention.
 //!
+//! ## KVM
+//!
+//! Upstream bmcweb (`features/kvm/kvm_websocket.hpp`) connects to TCP port
+//! 5900 on localhost where `obmc-ikvm` (or another kvmd) listens for VNC/RFB
+//! connections.  We implement the same proxy: accept the WebSocket upgrade,
+//! connect to `127.0.0.1:5900`, and forward binary frames in both directions.
+//! The VNC/RFB protocol is handled entirely by the kvmd daemon and the
+//! browser-side noVNC client — we are a transparent TCP proxy.
+//!
 //! ## Security
 //!
 //! All WebSocket endpoints require authentication.  The axum `ws` extractor
@@ -26,7 +35,7 @@
 //! | Endpoint         | Status                          |
 //! |------------------|---------------------------------|
 //! | /console0        | Implemented                     |
-//! | /kvm/0           | Stub — KVM proxying planned     |
+//! | /kvm/0           | Implemented (TCP proxy to :5900)|
 //! | /vm/0/0          | Not yet started                 |
 //! | /nbd/0           | Not yet started                 |
 //! | /redfish/events  | Implemented (SSE, event_service)|
@@ -40,8 +49,8 @@ use axum::{
 };
 use futures::{SinkExt, StreamExt};
 use std::sync::Arc;
-use tokio::net::UnixStream;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpStream, UnixStream};
 use tracing::{debug, error, info, warn};
 
 use crate::AppState;
@@ -180,33 +189,122 @@ async fn handle_serial_console(mut ws: WebSocket, _state: Arc<AppState>) {
 }
 
 // ---------------------------------------------------------------------------
-// KVM (stub)
+// KVM
 // ---------------------------------------------------------------------------
 
 /// WebSocket upgrade handler for KVM at `/kvm/0`.
 ///
-/// The upstream bmcweb KVM implementation proxies the RFB (VNC) frame
-/// buffer protocol over a WebSocket, connecting to a kvmd UNIX socket.
+/// Upstream bmcweb (`features/kvm/kvm_websocket.hpp`) connects to TCP port
+/// 5900 on localhost where `obmc-ikvm` runs the VNC/RFB server.  We implement
+/// the same transparent proxy: binary WebSocket frames are forwarded as raw
+/// TCP bytes in both directions.  The VNC/RFB protocol is handled entirely by
+/// the kvmd daemon and the client-side noVNC library.
 ///
-/// Full KVM proxying is planned.  The frame buffer protocol will require:
-///   1. Connecting to the KVM UNIX socket or /dev/fb device
-///   2. Negotiating RFB version and security type
-///   3. Forwarding FramebufferUpdate and PointerEvent/KeyEvent messages
+/// # OpenBMC service
+///
+/// The `obmc-ikvm` daemon listens on `127.0.0.1:5900`.  Ensure the
+/// `obmc-ikvm` service is enabled on the BMC for KVM to function.
 pub async fn kvm_handler(
     ws: WebSocketUpgrade,
     State(_state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
     debug!("WebSocket upgrade request for /kvm/0");
 
-    ws.on_upgrade(|mut socket| async move {
-        info!("KVM WebSocket connection established (not yet implemented)");
-        let _ = socket
-            .send(Message::Close(Some(axum::extract::ws::CloseFrame {
-                code: 1011,
-                reason: "KVM not yet implemented".into(),
-            })))
-            .await;
-    })
+    ws.on_upgrade(|socket| handle_kvm(socket))
+}
+
+/// Handle an established KVM WebSocket connection.
+///
+/// Connects to `obmc-ikvm` on `127.0.0.1:5900` and bidirectionally proxies
+/// binary frames between the WebSocket and the TCP connection.
+async fn handle_kvm(mut ws: WebSocket) {
+    info!("KVM WebSocket connection established");
+
+    const KVM_HOST: &str = "127.0.0.1:5900";
+
+    let stream = match TcpStream::connect(KVM_HOST).await {
+        Ok(s) => {
+            info!("Connected to KVM service at {}", KVM_HOST);
+            s
+        }
+        Err(e) => {
+            warn!("Failed to connect to KVM service {}: {}", KVM_HOST, e);
+            let _ = ws
+                .send(Message::Close(Some(axum::extract::ws::CloseFrame {
+                    code: 1011,
+                    reason: "KVM service unavailable".into(),
+                })))
+                .await;
+            return;
+        }
+    };
+
+    let (mut tcp_reader, mut tcp_writer) = tokio::io::split(stream);
+    let (mut ws_sender, mut ws_receiver) = ws.split();
+
+    // Task: TCP → WebSocket
+    let tcp_to_ws = tokio::spawn(async move {
+        let mut buf = vec![0u8; 4096];
+        loop {
+            match tcp_reader.read(&mut buf).await {
+                Ok(0) => {
+                    debug!("KVM TCP connection closed (EOF)");
+                    break;
+                }
+                Ok(n) => {
+                    if ws_sender
+                        .send(Message::Binary(buf[..n].to_vec()))
+                        .await
+                        .is_err()
+                    {
+                        debug!("KVM WebSocket send failed (client disconnected)");
+                        break;
+                    }
+                }
+                Err(e) => {
+                    error!("Error reading from KVM TCP socket: {}", e);
+                    break;
+                }
+            }
+        }
+    });
+
+    // Task: WebSocket → TCP
+    let ws_to_tcp = tokio::spawn(async move {
+        while let Some(msg) = ws_receiver.next().await {
+            match msg {
+                Ok(Message::Binary(data)) => {
+                    if tcp_writer.write_all(&data).await.is_err() {
+                        debug!("Failed to write to KVM TCP socket");
+                        break;
+                    }
+                }
+                Ok(Message::Text(text)) => {
+                    if tcp_writer.write_all(text.as_bytes()).await.is_err() {
+                        debug!("Failed to write to KVM TCP socket");
+                        break;
+                    }
+                }
+                Ok(Message::Close(_)) => {
+                    debug!("KVM WebSocket closed by client");
+                    break;
+                }
+                Ok(_) => {} // Ping/Pong handled by axum
+                Err(e) => {
+                    error!("KVM WebSocket receive error: {}", e);
+                    break;
+                }
+            }
+        }
+    });
+
+    // Wait for either direction to finish
+    tokio::select! {
+        _ = tcp_to_ws => {}
+        _ = ws_to_tcp => {}
+    }
+
+    info!("KVM WebSocket connection closed");
 }
 
 #[cfg(test)]

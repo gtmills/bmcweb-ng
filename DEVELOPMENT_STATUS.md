@@ -124,7 +124,7 @@ bmcweb-ng/
 
 10. **WebSocket Support** (`src/api/websocket/mod.rs`)
     - Serial console `/console0`: full bidirectional proxy to obmc-console UNIX socket
-    - KVM `/kvm/0`: stub with RFB protocol implementation guide
+    - KVM `/kvm/0`: bidirectional TCP proxy to `obmc-ikvm` at `127.0.0.1:5900`
 
 11. **Observability** (`src/observability/`)
     - Prometheus metrics (HTTP, auth, Redfish, DBus counters/histograms)
@@ -247,7 +247,7 @@ bmcweb-ng/
 | Registries/JsonSchemas | ✅ | ✅ | Collection stubs |
 | DBus set_property | ✅ | ✅ | String/bool/int/float/string-array types |
 | DBus REST API | ✅ | ❌ | TODO |
-| KVM WebSocket | ✅ | ⚠️ | Stub |
+| KVM WebSocket | ✅ | ✅ | TCP proxy to obmc-ikvm on :5900 |
 | Serial Console | ✅ | ✅ | Full bidirectional proxy |
 | Virtual Media | ✅ | ❌ | TODO |
 | Authentication | ✅ | ✅ | Basic + Session + Middleware |
@@ -320,7 +320,7 @@ Measured on OpenBMC `qemuarm` (emulated Cortex-A15, 256 MB RAM). Binary:
 - [x] CertificateService + TelemetryService endpoints
 
 ### Phase 4: Advanced Features
-- [ ] WebSocket KVM (RFB protocol)
+- [x] WebSocket KVM (TCP proxy to obmc-ikvm :5900)
 - [ ] Virtual Media
 - [ ] DBus REST API
 - [ ] mTLS authentication

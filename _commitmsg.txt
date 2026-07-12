@@ -1,24 +1,19 @@
-auth,rbac: enforce per-route privilege checks on all mutating handlers
+websocket,kvm: implement KVM TCP proxy to obmc-ikvm at 127.0.0.1:5900
 
-Wire check_privilege() into every PATCH, POST (action/create), and DELETE
-handler across the Redfish API surface.  Handlers behind auth_middleware
-now enforce RBAC before executing any state-changing operation.
+Replace the KVM stub with a real bidirectional proxy matching upstream
+bmcweb (features/kvm/kvm_websocket.hpp).
 
-Privilege mapping applied:
-  PRIVILEGE_PATCH      → patch_system, patch_chassis, patch_network_protocol,
-                         patch_manager_ethernet_interface, patch_session_service,
-                         patch_event_service
-  PRIVILEGE_ACTION     → reset_system, reset_manager, clear_event_log,
-                         clear_manager_bmc_log, submit_test_event,
-                         delete_task, simple_update
-  PRIVILEGE_CONFIGURE_USERS → patch_account_service, create_account,
-                              patch_account, delete_account,
-                              create_subscription, delete_subscription
-  DELETE session       → allows own-session deletion (ConfigureSelf) or
-                         any session deletion (ConfigureUsers)
+Upstream connects to TCP port 5900 on localhost where the obmc-ikvm
+daemon runs a VNC/RFB server.  The bmcweb layer is a transparent proxy
+— it does not speak RFB directly; it forwards raw bytes between the
+WebSocket and the TCP connection.  The VNC/RFB protocol is handled by
+obmc-ikvm and the browser-side noVNC client.
 
-All mutating handler signatures now accept Extension<UserSession> from
-the auth middleware.  Unit tests updated to pass an administrator session
-where handlers are called directly.
+Implementation mirrors the serial console handler:
+  - WebSocketUpgrade accepted; handle_kvm() spawned on-upgrade
+  - TcpStream::connect("127.0.0.1:5900"); on failure sends WS 1011 close
+  - Two tokio::spawn tasks: tcp_to_ws and ws_to_tcp
+  - tokio::select! waits for either direction to finish
+  - Binary and Text WS frames both forwarded as raw bytes
 
-122 unit tests passing; zero clippy warnings.
+DEVELOPMENT_STATUS.md updated: KVM marked ✅, Phase 4 checkbox ticked.
