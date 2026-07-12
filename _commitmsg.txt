@@ -1,24 +1,16 @@
-api: implement DBus REST API (/bus/, /list/, /xyz/*, /org/*)
+http: add static WebUI file serving at /ui
 
-Add src/api/dbus_rest.rs with a new dbus_rest_router() matching the
-upstream bmcweb openbmc_dbus_rest.hpp feature.
+Mount tower-http ServeDir at /ui, serving the OpenBMC Web UI from
+/usr/share/www (conventional OpenBMC installation path).  Falls back
+to ./www for local development when the system directory does not exist.
 
-Endpoints implemented:
-  GET /bus/                 → lists available buses (["system"])
-  GET /bus/system/          → calls org.freedesktop.DBus.ListNames and returns
-                              sorted well-known service names
-  GET /list/                → enumerates all objects via GetManagedObjects on
-                              xyz.openbmc_project.ObjectMapper
-  GET /xyz/<path>           → returns all interface properties of a DBus object
-                              at /xyz/<path>, querying candidate managed-object
-                              services (Inventory, State, Network, Logging, …)
-  PUT /xyz/<path>           → sets a single property via set_property(); body:
-                              { interface, property, value }
-  GET /org/<path>           → same as /xyz/<path> for /org/* object paths
-  PUT /org/<path>           → same as PUT /xyz/<path>
+ServeFile fallback to index.html is configured for SPA client-side
+routing — any path under /ui/ that does not match a physical file
+returns index.html so that the browser-side router can handle it.
 
-Routes wired into http.rs behind mandatory auth_middleware.
-Module registered in src/api/mod.rs.
-3 unit tests added (get_buses, get_bus_system no-dbus, get_list no-dbus).
-DEVELOPMENT_STATUS.md updated: DBus REST API marked ✅.
-Total: 125 tests passing; zero clippy warnings.
+The /ui routes are placed outside the auth middleware layer so that
+browsers can load assets without a session token.  Authentication is
+enforced at the API level (Redfish/DBus REST) not the asset level.
+
+DEVELOPMENT_STATUS.md updated: Static File Serving marked ✅.
+125 unit tests passing; zero clippy warnings.
