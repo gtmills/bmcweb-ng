@@ -1,17 +1,24 @@
-websocket: implement /vm/0/0 and /nbd/0 virtual media UNIX-socket proxy
+api: implement DBus REST API (/bus/, /list/, /xyz/*, /org/*)
 
-Add vm_handler (/vm/0/0) and nbd_handler (/nbd/0) WebSocket endpoints,
-both backed by handle_virtual_media() — a bidirectional UNIX domain socket
-proxy following the same pattern as handle_serial_console and handle_kvm.
+Add src/api/dbus_rest.rs with a new dbus_rest_router() matching the
+upstream bmcweb openbmc_dbus_rest.hpp feature.
 
-Upstream bmcweb (features/virtual_media/vm_websocket.hpp) connects to a
-UNIX socket path discovered via xyz.openbmc_project.VirtualMedia.MountPoint
-DBus properties.  Our implementation connects directly to well-known paths:
-  /vm/0/0  → /run/media-proxy/slot_0
-  /nbd/0   → /run/media-proxy/nbd_0
+Endpoints implemented:
+  GET /bus/                 → lists available buses (["system"])
+  GET /bus/system/          → calls org.freedesktop.DBus.ListNames and returns
+                              sorted well-known service names
+  GET /list/                → enumerates all objects via GetManagedObjects on
+                              xyz.openbmc_project.ObjectMapper
+  GET /xyz/<path>           → returns all interface properties of a DBus object
+                              at /xyz/<path>, querying candidate managed-object
+                              services (Inventory, State, Network, Logging, …)
+  PUT /xyz/<path>           → sets a single property via set_property(); body:
+                              { interface, property, value }
+  GET /org/<path>           → same as /xyz/<path> for /org/* object paths
+  PUT /org/<path>           → same as PUT /xyz/<path>
 
-Both paths match the OpenBMC nbd-proxy / obmc-usb-proxy convention.
-Buffer size is 128 KiB + 16 bytes (NBD max message size per protocol spec).
-
-Routes added to websocket_routes() router.
-DEVELOPMENT_STATUS.md updated: Virtual Media marked ✅.
+Routes wired into http.rs behind mandatory auth_middleware.
+Module registered in src/api/mod.rs.
+3 unit tests added (get_buses, get_bus_system no-dbus, get_list no-dbus).
+DEVELOPMENT_STATUS.md updated: DBus REST API marked ✅.
+Total: 125 tests passing; zero clippy warnings.

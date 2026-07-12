@@ -121,11 +121,19 @@ impl HttpServer {
                 optional_auth_middleware,
             ));
 
+        // DBus REST API routes — authenticated, mounted at root (same as upstream)
+        let dbus_rest_router = crate::api::dbus_rest::dbus_rest_router()
+            .layer(middleware::from_fn_with_state(
+                state.clone(),
+                auth_middleware,
+            ));
+
         Router::new()
             .route("/", get(root_handler))
-            .route("/health", get(health_handler))  // health_handler takes State<Arc<AppState>>
+            .route("/health", get(health_handler))
             .nest("/redfish/v1", redfish_router)
             .merge(ws_router)
+            .merge(dbus_rest_router)
             .layer(CompressionLayer::new())
             .layer(TraceLayer::new_for_http())
             .with_state(state)
