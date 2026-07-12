@@ -249,7 +249,7 @@ bmcweb-ng/
 | DBus REST API | ✅ | ❌ | TODO |
 | KVM WebSocket | ✅ | ✅ | TCP proxy to obmc-ikvm on :5900 |
 | Serial Console | ✅ | ✅ | Full bidirectional proxy |
-| Virtual Media | ✅ | ❌ | TODO |
+| Virtual Media | ✅ | ✅ | UNIX socket proxy to nbd-proxy (/run/media-proxy/slot_0) |
 | Authentication | ✅ | ✅ | Basic + Session + Middleware |
 | RBAC | ✅ | ✅ | Full; role from DBus at login, per-session storage |
 | TLS/HTTPS | ✅ | ✅ | rustls with PEM loading |
@@ -321,7 +321,7 @@ Measured on OpenBMC `qemuarm` (emulated Cortex-A15, 256 MB RAM). Binary:
 
 ### Phase 4: Advanced Features
 - [x] WebSocket KVM (TCP proxy to obmc-ikvm :5900)
-- [ ] Virtual Media
+- [x] Virtual Media (/vm/0/0 and /nbd/0 UNIX-socket proxy)
 - [ ] DBus REST API
 - [ ] mTLS authentication
 - [ ] LDAP integration

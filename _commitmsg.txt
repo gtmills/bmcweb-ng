@@ -1,19 +1,17 @@
-websocket,kvm: implement KVM TCP proxy to obmc-ikvm at 127.0.0.1:5900
+websocket: implement /vm/0/0 and /nbd/0 virtual media UNIX-socket proxy
 
-Replace the KVM stub with a real bidirectional proxy matching upstream
-bmcweb (features/kvm/kvm_websocket.hpp).
+Add vm_handler (/vm/0/0) and nbd_handler (/nbd/0) WebSocket endpoints,
+both backed by handle_virtual_media() — a bidirectional UNIX domain socket
+proxy following the same pattern as handle_serial_console and handle_kvm.
 
-Upstream connects to TCP port 5900 on localhost where the obmc-ikvm
-daemon runs a VNC/RFB server.  The bmcweb layer is a transparent proxy
-— it does not speak RFB directly; it forwards raw bytes between the
-WebSocket and the TCP connection.  The VNC/RFB protocol is handled by
-obmc-ikvm and the browser-side noVNC client.
+Upstream bmcweb (features/virtual_media/vm_websocket.hpp) connects to a
+UNIX socket path discovered via xyz.openbmc_project.VirtualMedia.MountPoint
+DBus properties.  Our implementation connects directly to well-known paths:
+  /vm/0/0  → /run/media-proxy/slot_0
+  /nbd/0   → /run/media-proxy/nbd_0
 
-Implementation mirrors the serial console handler:
-  - WebSocketUpgrade accepted; handle_kvm() spawned on-upgrade
-  - TcpStream::connect("127.0.0.1:5900"); on failure sends WS 1011 close
-  - Two tokio::spawn tasks: tcp_to_ws and ws_to_tcp
-  - tokio::select! waits for either direction to finish
-  - Binary and Text WS frames both forwarded as raw bytes
+Both paths match the OpenBMC nbd-proxy / obmc-usb-proxy convention.
+Buffer size is 128 KiB + 16 bytes (NBD max message size per protocol spec).
 
-DEVELOPMENT_STATUS.md updated: KVM marked ✅, Phase 4 checkbox ticked.
+Routes added to websocket_routes() router.
+DEVELOPMENT_STATUS.md updated: Virtual Media marked ✅.

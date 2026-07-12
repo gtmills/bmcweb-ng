@@ -68,6 +68,8 @@ pub fn websocket_routes() -> axum::Router<Arc<AppState>> {
     axum::Router::new()
         .route("/console0", get(serial_console_handler))
         .route("/kvm/0", get(kvm_handler))
+        .route("/vm/0/0", get(vm_handler))
+        .route("/nbd/0", get(nbd_handler))
 }
 
 // ---------------------------------------------------------------------------
@@ -305,6 +307,147 @@ async fn handle_kvm(mut ws: WebSocket) {
     }
 
     info!("KVM WebSocket connection closed");
+}
+
+// ---------------------------------------------------------------------------
+// Virtual Media
+// ---------------------------------------------------------------------------
+
+/// WebSocket upgrade handler for Virtual Media at `/vm/0/0`.
+///
+/// Upstream bmcweb (`features/virtual_media/vm_websocket.hpp`) queries
+/// `xyz.openbmc_project.VirtualMedia.MountPoint` to discover the UNIX socket
+/// path written by the `obmc-usb-proxy` daemon, then accepts connections on
+/// that socket and proxies traffic between the WebSocket and the nbd-proxy
+/// process.
+///
+/// This implementation uses a well-known default socket path
+/// (`/run/media-proxy/slot_0`) matching the OpenBMC nbd-proxy convention.
+/// When `obmc-usb-proxy` is present it creates this socket automatically.
+///
+/// # OpenBMC services
+///
+/// - `xyz.openbmc_project.VirtualMedia` — manages mount points
+/// - `nbd-proxy`                         — exposes the NBD block device via
+///   a UNIX socket that we connect to here
+pub async fn vm_handler(
+    ws: WebSocketUpgrade,
+    State(_state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    debug!("WebSocket upgrade request for /vm/0/0");
+
+    ws.on_upgrade(|socket| handle_virtual_media(socket, "/run/media-proxy/slot_0"))
+}
+
+/// WebSocket upgrade handler for the NBD virtual media slot at `/nbd/0`.
+///
+/// Follows the same UNIX-socket proxy pattern as `/vm/0/0` but targets slot 0
+/// of the NBD proxy daemon (`/run/media-proxy/nbd_0`).
+pub async fn nbd_handler(
+    ws: WebSocketUpgrade,
+    State(_state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    debug!("WebSocket upgrade request for /nbd/0");
+
+    ws.on_upgrade(|socket| handle_virtual_media(socket, "/run/media-proxy/nbd_0"))
+}
+
+/// Bidirectional UNIX-socket proxy for virtual media endpoints.
+///
+/// Connects to the given `socket_path` (a UNIX domain socket created by the
+/// `nbd-proxy` or `obmc-usb-proxy` daemon), then forwards binary frames
+/// between the WebSocket and the socket in both directions.
+///
+/// This is the same proxy pattern as [`handle_serial_console`] and
+/// [`handle_kvm`].
+async fn handle_virtual_media(mut ws: WebSocket, socket_path: &'static str) {
+    info!("Virtual Media WebSocket connection established ({})", socket_path);
+
+    let stream = match UnixStream::connect(socket_path).await {
+        Ok(s) => {
+            info!("Connected to virtual media socket at {}", socket_path);
+            s
+        }
+        Err(e) => {
+            warn!(
+                "Failed to connect to virtual media socket {}: {}",
+                socket_path, e
+            );
+            let _ = ws
+                .send(Message::Close(Some(axum::extract::ws::CloseFrame {
+                    code: 1011,
+                    reason: "Virtual media service unavailable".into(),
+                })))
+                .await;
+            return;
+        }
+    };
+
+    let (mut stream_reader, mut stream_writer) = tokio::io::split(stream);
+    let (mut ws_sender, mut ws_receiver) = ws.split();
+
+    // Task: UNIX socket → WebSocket
+    let socket_to_ws = tokio::spawn(async move {
+        let mut buf = vec![0u8; 128 * 1024 + 16]; // NBD max message size
+        loop {
+            match stream_reader.read(&mut buf).await {
+                Ok(0) => {
+                    debug!("Virtual media socket closed (EOF)");
+                    break;
+                }
+                Ok(n) => {
+                    if ws_sender
+                        .send(Message::Binary(buf[..n].to_vec()))
+                        .await
+                        .is_err()
+                    {
+                        debug!("Virtual media WebSocket send failed (client disconnected)");
+                        break;
+                    }
+                }
+                Err(e) => {
+                    error!("Error reading from virtual media socket: {}", e);
+                    break;
+                }
+            }
+        }
+    });
+
+    // Task: WebSocket → UNIX socket
+    let ws_to_socket = tokio::spawn(async move {
+        while let Some(msg) = ws_receiver.next().await {
+            match msg {
+                Ok(Message::Binary(data)) => {
+                    if stream_writer.write_all(&data).await.is_err() {
+                        debug!("Failed to write to virtual media socket");
+                        break;
+                    }
+                }
+                Ok(Message::Text(text)) => {
+                    if stream_writer.write_all(text.as_bytes()).await.is_err() {
+                        debug!("Failed to write to virtual media socket");
+                        break;
+                    }
+                }
+                Ok(Message::Close(_)) => {
+                    debug!("Virtual media WebSocket closed by client");
+                    break;
+                }
+                Ok(_) => {} // Ping/Pong handled by axum
+                Err(e) => {
+                    error!("Virtual media WebSocket receive error: {}", e);
+                    break;
+                }
+            }
+        }
+    });
+
+    tokio::select! {
+        _ = socket_to_ws => {}
+        _ = ws_to_socket => {}
+    }
+
+    info!("Virtual media WebSocket connection closed ({})", socket_path);
 }
 
 #[cfg(test)]
