@@ -1,33 +1,32 @@
-auth,tls: implement mutual TLS (mTLS) client certificate authentication
+redfish: expand Registries and JsonSchemas from stubs to full collections
 
-Add mTLS support across config, TLS layer, and auth middleware.
+service_root.rs:
+  - 5 registries advertised: Base v1.17.0, TaskEvent v1.0.3,
+    ResourceEvent v1.3.0, HeartbeatEvent v1.0.1, OpenBMC v1.0.0
+  - New GET /Registries/{registry_id} handler returns a
+    MessageRegistryFile resource with Location → canonical DMTF URI
+  - 26 JsonSchemas advertised covering all resource types implemented
+    in bmcweb-ng (ServiceRoot, ComputerSystem, Chassis, Manager,
+    SessionService, AccountService, EventService, TaskService,
+    UpdateService, LogService, Processor, Memory, EthernetInterface,
+    NetworkProtocol, Power, Thermal, Sensor, CertificateService,
+    TelemetryService, and related sub-resources)
+  - New GET /JsonSchemas/{schema_id} handler returns a JsonSchemaFile
+    resource with Location → canonical DMTF schema URI
+  - RegistryDef and SchemaDef static slice data structures replace
+    the previous hard-coded single-member stubs
 
-config/mod.rs:
-  - New ServerConfig fields: mtls_enabled (bool, default false) and
-    mtls_ca_cert (string, default /etc/bmcweb/ca.pem)
-  - #[serde(default)] on both fields so existing config.toml files
-    without these fields continue to work unchanged
+redfish/mod.rs:
+  - Two new routes added: /Registries/:registry_id, /JsonSchemas/:schema_id
 
-protocol/http.rs:
-  - build_mtls_config(cert, key, ca) — builds a rustls ServerConfig
-    with WebPkiClientVerifier requiring client certs signed by the CA
-  - run_tls() selects build_mtls_config or build_tls_config based on
-    mtls_enabled; logs whether mTLS is active at startup
-  - extract_peer_cert_subject() — after handshake, reads
-    peer_certificates() from the rustls ServerConnection and extracts
-    the Subject CommonName via DER byte walk (OID 2.5.4.3 / 0x55 0x04 0x03)
-  - Peer cert CN injected as X-Client-Cert-Subject request header
-    before dispatching to axum handlers
-  - extract_cn_from_der() helper exposed for unit testing
+Tests:
+  - test_registries_collection (count=5, Base and OpenBMC present)
+  - test_get_registry_base (Id, type, URI)
+  - test_get_registry_not_found (404)
+  - test_json_schemas_collection (count≥20, ComputerSystem present)
+  - test_get_json_schema_computer_system (Id, type, URI)
+  - test_get_json_schema_not_found (404)
 
-auth/middleware.rs:
-  - New auth arm: checks X-Client-Cert-Subject header (set by the TLS
-    accept loop above); if present, creates a session using the CN as
-    the username — cert is already verified by rustls CA trust store,
-    no password needed
-
-3 new unit tests in http.rs:
-  test_extract_cn_from_der_empty, test_extract_cn_from_der_simple,
-  test_build_mtls_config_missing_ca
-
-128 unit tests passing; zero clippy warnings.
+Lint: fix redundant_closure in websocket/mod.rs; remove unused `put`
+import in dbus_rest.rs.  Zero clippy warnings.
+134 unit tests passing.

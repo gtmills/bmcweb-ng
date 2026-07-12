@@ -244,7 +244,7 @@ bmcweb-ng/
 | UpdateService | ✅ | ✅ | FirmwareInventory from DBus + SimpleUpdate |
 | CertificateService | ✅ | ✅ | GET + CertificateLocations |
 | TelemetryService | ✅ | ✅ | GET + MetricDefinitions/Reports/ReportDefinitions |
-| Registries/JsonSchemas | ✅ | ✅ | Collection stubs |
+| Registries/JsonSchemas | ✅ | ✅ | Full collection + individual GET (5 registries, 26 schemas) |
 | DBus set_property | ✅ | ✅ | String/bool/int/float/string-array types |
 | DBus REST API | ✅ | ✅ | /bus/, /list/, /xyz/*, /org/* with GET+PUT |
 | KVM WebSocket | ✅ | ✅ | TCP proxy to obmc-ikvm on :5900 |
