@@ -29,7 +29,7 @@
 //! - Memory inventory:    xyz.openbmc_project.Inventory.Item.Dimm
 
 use axum::{
-    extract::{Path, State},
+    extract::{Extension, Path, State},
     http::StatusCode,
     response::Json,
     Json as JsonBody,
@@ -38,6 +38,8 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
+use crate::auth::privilege::{check_privilege, PRIVILEGE_ACTION, PRIVILEGE_PATCH};
+use crate::auth::session::UserSession;
 use crate::dbus::{DbusClient, ZBusClient};
 use crate::AppState;
 
@@ -307,10 +309,12 @@ pub async fn get_system(
 ///   - Name     → xyz.openbmc_project.Network.SystemConfiguration / HostName (hostname)
 pub async fn patch_system(
     State(state): State<Arc<AppState>>,
+    Extension(session): Extension<UserSession>,
     Path(system_id): Path<String>,
     JsonBody(body): JsonBody<Value>,
 ) -> Result<Json<Value>, StatusCode> {
     debug!("PATCH /redfish/v1/Systems/{}", system_id);
+    check_privilege(Some(&session), PRIVILEGE_PATCH)?;
     validate_system_id(&system_id)?;
 
     if let Some(conn) = state.dbus_connection.as_deref() {
@@ -408,6 +412,7 @@ pub async fn patch_system(
 ///   Nmi                    → xyz.openbmc_project.State.Host.Transition.DiagnosticMode
 pub async fn reset_system(
     State(state): State<Arc<AppState>>,
+    Extension(session): Extension<UserSession>,
     Path(system_id): Path<String>,
     JsonBody(payload): JsonBody<Value>,
 ) -> Result<StatusCode, StatusCode> {
@@ -415,6 +420,7 @@ pub async fn reset_system(
         "POST /redfish/v1/Systems/{}/Actions/ComputerSystem.Reset",
         system_id
     );
+    check_privilege(Some(&session), PRIVILEGE_ACTION)?;
     validate_system_id(&system_id)?;
 
     let reset_type = payload
@@ -982,12 +988,14 @@ pub async fn get_event_log_entry(
 /// Clears all log entries by calling `DeleteAll` on the OpenBMC logging service.
 pub async fn clear_event_log(
     State(state): State<Arc<AppState>>,
+    Extension(session): Extension<UserSession>,
     Path(system_id): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
     debug!(
         "POST /redfish/v1/Systems/{}/LogServices/EventLog/Actions/LogService.ClearLog",
         system_id
     );
+    check_privilege(Some(&session), PRIVILEGE_ACTION)?;
     validate_system_id(&system_id)?;
 
     if let Some(conn) = state.dbus_connection.as_deref() {

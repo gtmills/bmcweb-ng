@@ -12,7 +12,7 @@
 //! Reference: DMTF DSP0266, TaskService schema v1.2.0, Task schema v1.8.0
 
 use axum::{
-    extract::{Path, State},
+    extract::{Extension, Path, State},
     http::StatusCode,
     response::Json,
 };
@@ -20,6 +20,8 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
+use crate::auth::privilege::{check_privilege, PRIVILEGE_ACTION};
+use crate::auth::session::UserSession;
 use crate::services::{Task, TaskState};
 use crate::AppState;
 
@@ -157,9 +159,11 @@ pub async fn get_task(
 /// Removes a task from the task store.
 pub async fn delete_task(
     State(state): State<Arc<AppState>>,
+    Extension(session): Extension<UserSession>,
     Path(task_id): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
     debug!("DELETE /redfish/v1/TaskService/Tasks/{}", task_id);
+    check_privilege(Some(&session), PRIVILEGE_ACTION)?;
 
     let task_service = state
         .task_service
@@ -212,9 +216,23 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_task_not_found() {
+        use std::net::{IpAddr, Ipv4Addr};
+        use crate::auth::session::SessionType;
+        let mut admin = crate::auth::session::UserSession::new(
+            "testadmin".to_string(),
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            SessionType::Token,
+            3600,
+        );
+        admin.set_role("Administrator".to_string());
+
         let config = Config::default();
         let state = Arc::new(AppState::new(config));
-        let result = delete_task(State(state), Path("nonexistent".to_string())).await;
+        let result = delete_task(
+            State(state),
+            Extension(admin),
+            Path("nonexistent".to_string()),
+        ).await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), StatusCode::NOT_FOUND);
     }
