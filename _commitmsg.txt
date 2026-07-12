@@ -1,16 +1,33 @@
-http: add static WebUI file serving at /ui
+auth,tls: implement mutual TLS (mTLS) client certificate authentication
 
-Mount tower-http ServeDir at /ui, serving the OpenBMC Web UI from
-/usr/share/www (conventional OpenBMC installation path).  Falls back
-to ./www for local development when the system directory does not exist.
+Add mTLS support across config, TLS layer, and auth middleware.
 
-ServeFile fallback to index.html is configured for SPA client-side
-routing — any path under /ui/ that does not match a physical file
-returns index.html so that the browser-side router can handle it.
+config/mod.rs:
+  - New ServerConfig fields: mtls_enabled (bool, default false) and
+    mtls_ca_cert (string, default /etc/bmcweb/ca.pem)
+  - #[serde(default)] on both fields so existing config.toml files
+    without these fields continue to work unchanged
 
-The /ui routes are placed outside the auth middleware layer so that
-browsers can load assets without a session token.  Authentication is
-enforced at the API level (Redfish/DBus REST) not the asset level.
+protocol/http.rs:
+  - build_mtls_config(cert, key, ca) — builds a rustls ServerConfig
+    with WebPkiClientVerifier requiring client certs signed by the CA
+  - run_tls() selects build_mtls_config or build_tls_config based on
+    mtls_enabled; logs whether mTLS is active at startup
+  - extract_peer_cert_subject() — after handshake, reads
+    peer_certificates() from the rustls ServerConnection and extracts
+    the Subject CommonName via DER byte walk (OID 2.5.4.3 / 0x55 0x04 0x03)
+  - Peer cert CN injected as X-Client-Cert-Subject request header
+    before dispatching to axum handlers
+  - extract_cn_from_der() helper exposed for unit testing
 
-DEVELOPMENT_STATUS.md updated: Static File Serving marked ✅.
-125 unit tests passing; zero clippy warnings.
+auth/middleware.rs:
+  - New auth arm: checks X-Client-Cert-Subject header (set by the TLS
+    accept loop above); if present, creates a session using the CN as
+    the username — cert is already verified by rustls CA trust store,
+    no password needed
+
+3 new unit tests in http.rs:
+  test_extract_cn_from_der_empty, test_extract_cn_from_der_simple,
+  test_build_mtls_config_missing_ca
+
+128 unit tests passing; zero clippy warnings.
