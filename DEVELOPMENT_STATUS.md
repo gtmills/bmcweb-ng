@@ -253,7 +253,7 @@ bmcweb-ng/
 | Authentication | ✅ | ✅ | Basic + Session + Middleware |
 | RBAC | ✅ | ✅ | Full; role from DBus at login, per-session storage |
 | TLS/HTTPS | ✅ | ✅ | rustls with PEM loading |
-| Static File Serving | ✅ | ❌ | TODO |
+| Static File Serving | ✅ | ✅ | ServeDir from /usr/share/www at /ui |
 | Systemd Integration | ✅ | ✅ | Service + socket files |
 | Persistent UUID | ✅ | ✅ | Atomic JSON persistence |
 | Prometheus Metrics | ❌ | ✅ | Additional capability |

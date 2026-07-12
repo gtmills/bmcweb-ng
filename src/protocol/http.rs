@@ -48,6 +48,7 @@ use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
 use tower_http::{
     compression::CompressionLayer,
+    services::{ServeDir, ServeFile},
     trace::TraceLayer,
 };
 use tracing::{error, info, warn};
@@ -128,12 +129,29 @@ impl HttpServer {
                 auth_middleware,
             ));
 
+        // Static WebUI file serving — unauthenticated so browsers can load
+        // assets.  Served from /usr/share/www (OpenBMC convention), with a
+        // fallback to ./www for development.  Falls back to index.html for
+        // SPA-style client-side routing.
+        let webui_path = if Path::new("/usr/share/www").exists() {
+            "/usr/share/www"
+        } else {
+            "./www"
+        };
+        let webui_router: Router<Arc<AppState>> = Router::new()
+            .nest_service(
+                "/ui",
+                ServeDir::new(webui_path)
+                    .fallback(ServeFile::new(format!("{}/index.html", webui_path))),
+            );
+
         Router::new()
             .route("/", get(root_handler))
             .route("/health", get(health_handler))
             .nest("/redfish/v1", redfish_router)
             .merge(ws_router)
             .merge(dbus_rest_router)
+            .merge(webui_router)
             .layer(CompressionLayer::new())
             .layer(TraceLayer::new_for_http())
             .with_state(state)
