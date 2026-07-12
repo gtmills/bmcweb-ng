@@ -16,6 +16,10 @@ single developer.
 - [Error Handling](#error-handling)
 - [Imports](#imports)
 - [Tests](#tests)
+- [Async Patterns](#async-patterns)
+- [Redfish Response Conventions](#redfish-response-conventions)
+- [Logging](#logging)
+- [Security](#security)
 - [DBus Conventions](#dbus-conventions)
 - [Enforcement](#enforcement)
 
@@ -323,6 +327,208 @@ async fn test_get_session_service() {
     assert_eq!(body.0["Id"], "SessionService");
 }
 ```
+
+---
+
+## Async Patterns
+
+### `tokio::spawn` vs inline await
+
+Prefer inline `.await` for sequential work inside a handler.  Use
+`tokio::spawn` only when a task must outlive the request (background
+work, long-running proxies) or when two operations can proceed
+concurrently:
+
+```rust
+// Good — concurrent I/O on independent futures
+let (a, b) = tokio::join!(fetch_power_state(&client), fetch_firmware_version(&client));
+
+// Good — background task that outlives the request
+tokio::spawn(async move { event_dispatcher.dispatch(event).await });
+
+// Avoid — unnecessary spawn for work that belongs in the request lifetime
+tokio::spawn(async move { some_inline_work().await }).await.unwrap();
+```
+
+### Sharing state across tasks
+
+Wrap shared mutable state in `Arc<RwLock<T>>` or `Arc<Mutex<T>>`.  Pass a
+clone of the `Arc` into each `tokio::spawn` closure — never pass raw
+references across spawn boundaries.  Prefer `RwLock` when reads vastly
+outnumber writes (session store, event service settings).
+
+```rust
+// Good
+let store = Arc::clone(&state.session_store);
+tokio::spawn(async move { store.do_something().await });
+
+// Avoid — will not compile, but the pattern is wrong conceptually too
+tokio::spawn(async { state.session_store.do_something().await });
+```
+
+### Blocking operations
+
+Never call blocking I/O (file reads, synchronous network calls) directly
+in an async context.  Use `tokio::fs` for filesystem operations and
+`tokio::task::spawn_blocking` for CPU-bound work:
+
+```rust
+// Good
+let contents = tokio::fs::read_to_string(path).await?;
+
+// Good — CPU-heavy parsing
+let parsed = tokio::task::spawn_blocking(move || parse_heavy(data)).await?;
+
+// Avoid
+let contents = std::fs::read_to_string(path)?; // blocks the executor thread
+```
+
+---
+
+## Redfish Response Conventions
+
+### `@odata` fields
+
+Every Redfish response object must include:
+
+| Field | Rule |
+|-------|------|
+| `@odata.type` | The full schema type string, e.g. `#ComputerSystem.v1_20_0.ComputerSystem` |
+| `@odata.id`   | The canonical URL of the resource, e.g. `/redfish/v1/Systems/system` |
+| `Id`          | The bare identifier string, e.g. `"system"` |
+| `Name`        | A human-readable name string |
+
+Do not omit these fields from any resource-level response. Collection
+responses also require `Members@odata.count` and a `Members` array.
+
+### Collection shape
+
+```rust
+json!({
+    "@odata.type": "#FooCollection.FooCollection",
+    "@odata.id":   "/redfish/v1/Foos",
+    "Name":        "Foo Collection",
+    "Members@odata.count": members.len(),
+    "Members": members,   // Vec<Value>, each with at least { "@odata.id": "..." }
+})
+```
+
+### Error responses
+
+Use the Redfish extended error format for 4xx/5xx responses wherever
+possible:
+
+```rust
+(
+    StatusCode::NOT_FOUND,
+    Json(json!({
+        "error": {
+            "code": "Base.1.0.ResourceNotFound",
+            "message": format!("Resource '{}' not found", id),
+        }
+    })),
+)
+```
+
+For simple handler guards (`validate_system_id`, not-found checks) a
+plain `Err(StatusCode::NOT_FOUND)` is acceptable — the Redfish error
+body is only required when returning JSON anyway.
+
+### `@odata.id` construction
+
+Always build `@odata.id` values from the path components actually
+received in the handler parameters.  Do not hard-code chassis, system,
+or manager names:
+
+```rust
+// Good
+let base = format!("/redfish/v1/Chassis/{}", chassis_id);
+
+// Avoid
+let base = "/redfish/v1/Chassis/chassis"; // hard-coded
+```
+
+---
+
+## Logging
+
+Use the `tracing` crate macros.  Choose the level by the audience and
+the recurrence of the message:
+
+| Level | When to use | Examples |
+|-------|-------------|---------|
+| `error!` | Unrecoverable failures; the server cannot complete the operation and the cause requires immediate attention. | TLS init failure, persistent-data write failure. |
+| `warn!`  | Degraded operation; the request completed with fallback behaviour or an external dependency was unavailable. | DBus unreachable (fallback to "Unknown"), auth failure, unexpected DBus value. |
+| `info!`  | Normal significant lifecycle events logged once per operation. | WebSocket connection opened/closed, session created/deleted, firmware update started. |
+| `debug!` | Detailed per-request tracing useful during development. Should be effectively free when the subscriber is at INFO level. | Entering a handler, checking auth token, DBus property value read. |
+| `trace!` | Low-level loop iterations and byte-level I/O.  Not used in production paths. | Bytes forwarded in console proxy loop. |
+
+### Rules
+
+- Do not log passwords, tokens, or session IDs at any level.
+- Include enough context to identify the operation without reading the
+  source: `warn!("Cannot read PowerState from DBus: {}", e)` is good;
+  `warn!("DBus error")` is not.
+- Structured fields (key=value) are preferred in `info!` and above:
+  `info!(username = %username, role = %role, "Session created")`.
+
+---
+
+## Security
+
+### Session tokens
+
+Session tokens must be generated with a cryptographically secure RNG.
+Use `rand::rngs::OsRng` or `rand::thread_rng()` (which seeds from the
+OS).  The current implementation in `auth/session.rs` uses UUID v4
+from the `uuid` crate, which relies on the OS entropy source — this is
+acceptable.
+
+Never derive tokens from usernames, timestamps, or sequential IDs.
+
+### Privilege checks
+
+Every handler that modifies state (PATCH, POST, DELETE, action endpoints)
+**must** call [`check_privilege`](../src/auth/privilege.rs) before
+performing any operation.  Read-only (GET) handlers must check
+`PRIVILEGE_GET`.  The pattern is:
+
+```rust
+pub async fn patch_foo(
+    State(state): State<Arc<AppState>>,
+    Extension(session): Extension<UserSession>,
+    …
+) -> impl IntoResponse {
+    if let Err(status) = check_privilege(Some(&session), PRIVILEGE_PATCH) {
+        return (status, Json(json!({"error": "Insufficient privilege"}))).into_response();
+    }
+    // … proceed
+}
+```
+
+Handlers behind the mandatory `auth_middleware` always have a session in
+extensions.  Handlers on the public (unauthenticated) router must either
+use `PRIVILEGE_CREATE_SESSION` (empty — always passes) or explicitly
+allow unauthenticated access.
+
+### Input validation
+
+- Never pass user-controlled strings directly to DBus service, path, or
+  interface arguments without validation.  Check that path components
+  contain only alphanumeric characters, hyphens, and underscores before
+  constructing DBus object paths.
+- URL path parameters (`:system_id`, `:chassis_id`, etc.) must be
+  validated against known-good identifiers using the helpers already
+  present (`validate_system_id`, dynamic DBus enumeration).
+- JSON body fields must be type-checked at the serde deserialisation
+  boundary; reject requests with unexpected fields or out-of-range values
+  with `400 Bad Request`.
+
+### TLS
+
+Do not disable certificate verification in TLS client code.  The
+`reqwest` client used for event delivery must use the system root store
+or an explicit trust anchor — never `.danger_accept_invalid_certs(true)`.
 
 ---
 
