@@ -323,7 +323,7 @@ Measured on OpenBMC `qemuarm` (emulated Cortex-A15, 256 MB RAM). Binary:
 - [x] WebSocket KVM (TCP proxy to obmc-ikvm :5900)
 - [x] Virtual Media (/vm/0/0 and /nbd/0 UNIX-socket proxy)
 - [x] DBus REST API (/bus/, /list/, /xyz/*, /org/* GET + PUT)
-- [ ] mTLS authentication
+- [x] mTLS authentication (build_mtls_config + peer cert CN extraction + middleware arm)
 - [ ] LDAP integration
 
 ### Phase 5: Production Readiness

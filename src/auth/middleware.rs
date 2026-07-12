@@ -130,6 +130,27 @@ pub async fn auth_middleware(
         }
     }
 
+    // Try mTLS client certificate authentication via the injected header.
+    // The TLS accept loop injects X-Client-Cert-Subject containing the
+    // peer certificate CN when mTLS is configured.
+    if let Some(cert_subject) = headers.get("x-client-cert-subject") {
+        if let Ok(subject_str) = cert_subject.to_str() {
+            debug!("Attempting mTLS authentication for subject: {}", subject_str);
+            // Use the CN as the username.  The cert was already verified by
+            // rustls using the CA trust store configured at startup, so we
+            // do not need a password.
+            if let Some(session) = session_store.create_session(
+                subject_str.to_string(),
+                client_ip,
+                SessionType::Token,
+            ) {
+                debug!("mTLS authentication successful for CN='{}'", subject_str);
+                request.extensions_mut().insert(session);
+                return Ok(next.run(request).await);
+            }
+        }
+    }
+
     // No valid authentication found
     warn!("No valid authentication provided from IP: {}", client_ip);
     Err(StatusCode::UNAUTHORIZED)

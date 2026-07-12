@@ -200,11 +200,24 @@ impl HttpServer {
     /// Loads the PEM certificate chain and private key from the configured
     /// paths. If the files do not exist, a self-signed certificate is
     /// generated in-memory for development purposes.
+    ///
+    /// When `mtls_enabled` is true in the server config, the TLS server requests
+    /// a client certificate.  After handshake, the peer certificate Subject CN
+    /// is extracted and injected as an `X-Client-Cert-Subject` header so that
+    /// the auth middleware can authenticate the request using the cert identity.
     async fn run_tls(self, addr: SocketAddr) -> Result<()> {
         info!("Starting HTTPS server on {}", addr);
 
-        let tls_config = build_tls_config(&self.config.tls_cert, &self.config.tls_key)
-            .context("Failed to build TLS configuration")?;
+        let mtls_enabled = self.config.mtls_enabled;
+        let mtls_ca_cert = self.config.mtls_ca_cert.clone();
+
+        let tls_config = if mtls_enabled {
+            build_mtls_config(&self.config.tls_cert, &self.config.tls_key, &mtls_ca_cert)
+                .context("Failed to build mTLS configuration")?
+        } else {
+            build_tls_config(&self.config.tls_cert, &self.config.tls_key)
+                .context("Failed to build TLS configuration")?
+        };
 
         let acceptor = TlsAcceptor::from(Arc::new(tls_config));
         let router = self.build_router();
@@ -212,7 +225,11 @@ impl HttpServer {
             .await
             .with_context(|| format!("Failed to bind to {}", addr))?;
 
-        info!("HTTPS server listening on {}", addr);
+        if mtls_enabled {
+            info!("HTTPS server with mTLS listening on {}", addr);
+        } else {
+            info!("HTTPS server listening on {}", addr);
+        }
 
         // Accept loop: each TLS connection is handled in its own task.
         // We use hyper's lower-level serve_connection to drive a single
@@ -232,8 +249,19 @@ impl HttpServer {
             tokio::spawn(async move {
                 match acceptor.accept(stream).await {
                     Ok(tls_stream) => {
+                        // Extract peer certificate Subject CN and inject as a
+                        // request header so the auth middleware can use it.
+                        let peer_subject = extract_peer_cert_subject(&tls_stream);
+
                         let io = hyper_util::rt::TokioIo::new(tls_stream);
-                        let hyper_service = hyper::service::service_fn(move |req| {
+                        let hyper_service = hyper::service::service_fn(move |mut req| {
+                            // Inject the cert subject header if present
+                            if let Some(ref subject) = peer_subject {
+                                if let Ok(val) = axum::http::HeaderValue::from_str(subject) {
+                                    req.headers_mut()
+                                        .insert("x-client-cert-subject", val);
+                                }
+                            }
                             tower_service.clone().call(req)
                         });
                         if let Err(e) = hyper::server::conn::http1::Builder::new()
@@ -266,6 +294,61 @@ impl HttpServer {
 // TLS configuration builder
 // ---------------------------------------------------------------------------
 
+/// Extract the Subject Common Name (CN) from the peer certificate of an
+/// accepted TLS stream, if any.
+///
+/// Returns `None` if the client presented no certificate (mTLS optional mode)
+/// or if the subject cannot be parsed.
+fn extract_peer_cert_subject(
+    tls_stream: &tokio_rustls::server::TlsStream<tokio::net::TcpStream>,
+) -> Option<String> {
+    // Access the rustls ServerConnection via the TLS stream internals
+    let server_conn = tls_stream.get_ref().1;
+    let certs = server_conn.peer_certificates()?;
+    let cert_der = certs.first()?;
+
+    // Parse the DER-encoded certificate with the `rcgen` / `rustls` pki_types
+    // We use the raw DER to extract the Subject field.  The Subject is
+    // stored as an X.509 RDN (Relative Distinguished Name) sequence.
+    // We do a minimal parse: locate CN= within the human-readable repr.
+    //
+    // We rely on the `rustls-pki-types` representation which is already DER;
+    // for the CN extraction we convert the raw bytes to a best-effort string.
+    let der_bytes = cert_der.as_ref();
+
+    // Find the Subject CN using a simple DER walk.  The OID for CommonName is
+    // 2.5.4.3, encoded as 55 04 03 in DER.
+    // This is a deliberately minimal implementation — we only need the CN string
+    // to identify the user, not full certificate validation (rustls does that).
+    let cn = extract_cn_from_der(der_bytes);
+    if let Some(ref name) = cn {
+        tracing::debug!("mTLS peer certificate CN: {}", name);
+    }
+    cn
+}
+
+/// Walk DER bytes to extract the Subject CommonName (OID 2.5.4.3).
+fn extract_cn_from_der(der: &[u8]) -> Option<String> {
+    // CommonName OID sequence in DER: 30 09 06 03 55 04 03 ...
+    // We search for the pattern [0x55, 0x04, 0x03] (OID 2.5.4.3)
+    let oid_cn = [0x55u8, 0x04, 0x03];
+    let pos = der.windows(3).position(|w| w == oid_cn)?;
+    // After the OID tag+length (3 bytes), expect a string type tag + length + value
+    let after_oid = pos + 3;
+    if after_oid + 2 > der.len() {
+        return None;
+    }
+    // Skip the string type byte (0x0C = UTF8String, 0x13 = PrintableString, etc.)
+    let str_len = der[after_oid + 1] as usize;
+    let str_start = after_oid + 2;
+    if str_start + str_len > der.len() {
+        return None;
+    }
+    std::str::from_utf8(&der[str_start..str_start + str_len])
+        .ok()
+        .map(|s| s.to_string())
+}
+
 /// Build a [`rustls::ServerConfig`] from PEM certificate and key files.
 ///
 /// If the files do not exist, falls back to a self-signed certificate
@@ -284,6 +367,88 @@ fn build_tls_config(cert_path: &str, key_path: &str) -> Result<ServerConfig> {
         generate_self_signed_tls_config()
     }
 }
+
+
+/// Build a [`rustls::ServerConfig`] with mutual TLS (client certificate verification).
+///
+/// Loads the CA certificate from `ca_cert_path` and configures the server to
+/// request and verify client certificates signed by that CA.
+///
+/// If the CA cert file does not exist, returns an error.
+/// If the server cert/key files do not exist, falls back to a self-signed cert
+/// (development mode).
+fn build_mtls_config(cert_path: &str, key_path: &str, ca_cert_path: &str) -> Result<ServerConfig> {
+    use rustls::server::WebPkiClientVerifier;
+    use rustls::RootCertStore;
+
+    if !Path::new(ca_cert_path).exists() {
+        return Err(anyhow::anyhow!(
+            "mTLS CA certificate not found: {}",
+            ca_cert_path
+        ));
+    }
+
+    // Load CA certificate for verifying client certs
+    let ca_file = File::open(ca_cert_path)
+        .with_context(|| format!("Cannot open mTLS CA certificate: {}", ca_cert_path))?;
+    let mut ca_reader = BufReader::new(ca_file);
+    let ca_certs: Vec<rustls::pki_types::CertificateDer> = certs(&mut ca_reader)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .context("Failed to parse mTLS CA certificate PEM")?;
+
+    if ca_certs.is_empty() {
+        return Err(anyhow::anyhow!("No CA certificates found in {}", ca_cert_path));
+    }
+
+    let mut root_store = RootCertStore::empty();
+    for cert in ca_certs {
+        root_store.add(cert).context("Failed to add CA cert to root store")?;
+    }
+
+    let client_verifier = WebPkiClientVerifier::builder(Arc::new(root_store))
+        .build()
+        .context("Failed to build WebPki client verifier")?;
+
+    // Load server certificate and key
+    let (server_certs, server_key) = if Path::new(cert_path).exists() && Path::new(key_path).exists() {
+        let cert_file = File::open(cert_path)
+            .with_context(|| format!("Cannot open certificate file: {}", cert_path))?;
+        let mut cert_reader = BufReader::new(cert_file);
+        let server_certs: Vec<rustls::pki_types::CertificateDer> = certs(&mut cert_reader)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .context("Failed to parse server certificate")?;
+
+        let key_file = File::open(key_path)
+            .with_context(|| format!("Cannot open key file: {}", key_path))?;
+        let mut key_reader = BufReader::new(key_file);
+        let mut keys = pkcs8_private_keys(&mut key_reader)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .context("Failed to parse private key")?;
+
+        if keys.is_empty() {
+            return Err(anyhow::anyhow!("No private keys found in {}", key_path));
+        }
+        let server_key = rustls::pki_types::PrivateKeyDer::Pkcs8(keys.remove(0));
+        (server_certs, server_key)
+    } else {
+        warn!("Server cert/key not found for mTLS; generating self-signed certificate");
+        use rcgen::generate_simple_self_signed;
+        let cert = generate_simple_self_signed(vec!["localhost".to_string()])
+            .context("Failed to generate self-signed cert for mTLS")?;
+        let cert_der = cert.cert.der().clone();
+        let key_der = rustls::pki_types::PrivateKeyDer::Pkcs8(cert.key_pair.serialize_der().into());
+        (vec![cert_der], key_der)
+    };
+
+    let config = ServerConfig::builder()
+        .with_client_cert_verifier(client_verifier)
+        .with_single_cert(server_certs, server_key)
+        .context("Failed to build mTLS ServerConfig")?;
+
+    info!("mTLS: requesting client certificates verified by {}", ca_cert_path);
+    Ok(config)
+}
+
 
 /// Load TLS configuration from PEM files.
 fn load_tls_config_from_files(cert_path: &str, key_path: &str) -> Result<ServerConfig> {
@@ -441,6 +606,38 @@ mod tests {
     fn test_generate_self_signed_tls_config() {
         let result = generate_self_signed_tls_config();
         assert!(result.is_ok(), "Self-signed cert generation failed: {:?}", result);
+    }
+
+    #[test]
+    fn test_extract_cn_from_der_empty() {
+        // Empty DER returns None
+        assert!(extract_cn_from_der(&[]).is_none());
+    }
+
+    #[test]
+    fn test_extract_cn_from_der_simple() {
+        // Construct a minimal DER snippet with OID 2.5.4.3 followed by a CN
+        // Pattern: 55 04 03 (OID bytes) + type_byte + len + value
+        let cn_value = b"testuser";
+        let mut der: Vec<u8> = vec![0x55, 0x04, 0x03]; // OID CommonName
+        der.push(0x0C); // UTF8String tag
+        der.push(cn_value.len() as u8);
+        der.extend_from_slice(cn_value);
+        let result = extract_cn_from_der(&der);
+        assert_eq!(result, Some("testuser".to_string()));
+    }
+
+    #[test]
+    fn test_build_mtls_config_missing_ca() {
+        // When CA cert file does not exist, build_mtls_config should fail
+        let result = build_mtls_config(
+            "/nonexistent/cert.pem",
+            "/nonexistent/key.pem",
+            "/nonexistent/ca.pem",
+        );
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("not found"), "Expected 'not found' in: {}", msg);
     }
 
     #[tokio::test]
