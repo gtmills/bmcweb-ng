@@ -9,6 +9,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.0] - 2026-07-11
+
+### Added
+
+- **CODING_STANDARDS.md expanded** — Four new sections: Async Patterns
+  (`tokio::spawn` vs inline await, `Arc` sharing, blocking-I/O prohibition),
+  Redfish Response Conventions (`@odata` fields, collection shape, error
+  format, dynamic `@odata.id`), Logging (level guidance table with examples),
+  and Security (session tokens, per-handler `check_privilege()` pattern, input
+  validation rules, TLS cert verification requirement).
+
+- **Per-route RBAC enforcement** (`auth/privilege.rs`, all handler files) —
+  `check_privilege()` wired into every PATCH, POST (action/create), and DELETE
+  handler across the Redfish API.  `Extension<UserSession>` added to all
+  mutating handler signatures.  `delete_session` enforces own-session vs
+  ConfigureUsers privilege correctly.
+
+- **KVM WebSocket proxy** (`api/websocket/mod.rs`) — `/kvm/0` now proxies
+  bidirectionally to `obmc-ikvm` on `127.0.0.1:5900` (TCP) matching upstream
+  `features/kvm/kvm_websocket.hpp`.  Replaces the 1011-close stub.
+
+- **Virtual Media WebSocket endpoints** (`api/websocket/mod.rs`) — `/vm/0/0`
+  and `/nbd/0` added as UNIX-socket proxies to `/run/media-proxy/slot_0` and
+  `/run/media-proxy/nbd_0` respectively.  Buffer size 128 KiB + 16 bytes
+  (NBD max message per protocol spec).
+
+- **DBus REST API** (`api/dbus_rest.rs`) — New module implementing the upstream
+  `openbmc_dbus_rest.hpp` feature:
+  - `GET /bus/` — list buses
+  - `GET /bus/system/` — list DBus service names via `ListNames`
+  - `GET /list/` — enumerate all objects via `GetManagedObjects`
+  - `GET /xyz/<path>`, `GET /org/<path>` — get all properties of a DBus object
+  - `PUT /xyz/<path>`, `PUT /org/<path>` — set a property via `set_property`
+  Routes mounted at root behind mandatory auth middleware.
+
+- **Static WebUI file serving** (`protocol/http.rs`) — `ServeDir` mounted at
+  `/ui` serving from `/usr/share/www` (OpenBMC) or `./www` (dev fallback).
+  `ServeFile` fallback to `index.html` for SPA client-side routing.
+
+- **Mutual TLS (mTLS) authentication** (`config/mod.rs`, `protocol/http.rs`,
+  `auth/middleware.rs`) — `mtls_enabled` and `mtls_ca_cert` fields added to
+  `ServerConfig` (serde-defaulted, backward compatible).  `build_mtls_config()`
+  uses `WebPkiClientVerifier` to require client certs signed by the configured
+  CA.  Peer certificate Subject CN extracted via DER byte walk and injected as
+  `X-Client-Cert-Subject` header; auth middleware creates a session from the CN.
+
+- **Registries and JsonSchemas full content** (`api/redfish/service_root.rs`,
+  `api/redfish/mod.rs`) — Replaces empty stubs with:
+  - 5 registries: Base v1.17.0, TaskEvent v1.0.3, ResourceEvent v1.3.0,
+    HeartbeatEvent v1.0.1, OpenBMC v1.0.0
+  - 26 JsonSchemas covering all resource types implemented in bmcweb-ng
+  - New `GET /Registries/{id}` and `GET /JsonSchemas/{id}` endpoints returning
+    `MessageRegistryFile` and `JsonSchemaFile` resources with DMTF URIs.
+
+### Tests
+
+- 134 unit tests passing (up from 122 at v0.2.1).
+- 63/63 QEMU integration tests passing.
+- Zero clippy warnings.
+
+---
+
 ## [0.2.1] - 2026-07-11
 
 ### Added
@@ -367,7 +429,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Apache 2.0 license
 - Git repository initialization
 
-[Unreleased]: https://github.com/gtmills/bmcweb-ng/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/gtmills/bmcweb-ng/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/gtmills/bmcweb-ng/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/gtmills/bmcweb-ng/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/gtmills/bmcweb-ng/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/gtmills/bmcweb-ng/releases/tag/v0.1.0
