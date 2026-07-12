@@ -18,7 +18,7 @@
 //!   - NTP/DNS: xyz.openbmc_project.Network.SystemConfiguration
 
 use axum::{
-    extract::{Path, State},
+    extract::{Extension, Path, State},
     http::StatusCode,
     response::Json,
     Json as JsonBody,
@@ -27,6 +27,8 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
+use crate::auth::privilege::{check_privilege, PRIVILEGE_ACTION, PRIVILEGE_PATCH};
+use crate::auth::session::UserSession;
 use crate::dbus::{DbusClient, ZBusClient};
 use crate::AppState;
 
@@ -153,6 +155,7 @@ pub async fn get_manager(
 ///   ForceRestart    → xyz.openbmc_project.State.BMC.Transition.HardReboot
 pub async fn reset_manager(
     State(state): State<Arc<AppState>>,
+    Extension(session): Extension<UserSession>,
     Path(manager_id): Path<String>,
     JsonBody(payload): JsonBody<Value>,
 ) -> Result<StatusCode, StatusCode> {
@@ -160,6 +163,7 @@ pub async fn reset_manager(
         "POST /redfish/v1/Managers/{}/Actions/Manager.Reset",
         manager_id
     );
+    check_privilege(Some(&session), PRIVILEGE_ACTION)?;
     validate_manager_id(&manager_id)?;
 
     let reset_type = payload
@@ -284,10 +288,12 @@ pub async fn get_network_protocol(
 ///   properties: HostName (string), NTPServers (array of strings)
 pub async fn patch_network_protocol(
     State(state): State<Arc<AppState>>,
+    Extension(session): Extension<UserSession>,
     Path(manager_id): Path<String>,
     JsonBody(body): JsonBody<Value>,
 ) -> Result<Json<Value>, StatusCode> {
     debug!("PATCH /redfish/v1/Managers/{}/NetworkProtocol", manager_id);
+    check_privilege(Some(&session), PRIVILEGE_PATCH)?;
     validate_manager_id(&manager_id)?;
 
     if let Some(conn) = state.dbus_connection.as_deref() {
@@ -544,6 +550,7 @@ pub async fn get_manager_ethernet_interface(
 ///   MACAddress   → xyz.openbmc_project.Network.EthernetInterface / MACAddress (string)
 pub async fn patch_manager_ethernet_interface(
     State(state): State<Arc<AppState>>,
+    Extension(session): Extension<UserSession>,
     Path((manager_id, nic_id)): Path<(String, String)>,
     JsonBody(body): JsonBody<Value>,
 ) -> Result<Json<Value>, StatusCode> {
@@ -551,6 +558,7 @@ pub async fn patch_manager_ethernet_interface(
         "PATCH /redfish/v1/Managers/{}/EthernetInterfaces/{}",
         manager_id, nic_id
     );
+    check_privilege(Some(&session), PRIVILEGE_PATCH)?;
     validate_manager_id(&manager_id)?;
 
     if let Some(conn) = state.dbus_connection.as_deref() {
@@ -796,12 +804,14 @@ pub async fn get_manager_bmc_log_entries(
 /// POST /redfish/v1/Managers/{manager_id}/LogServices/BMC/Actions/LogService.ClearLog
 pub async fn clear_manager_bmc_log(
     State(state): State<Arc<AppState>>,
+    Extension(session): Extension<UserSession>,
     Path(manager_id): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
     debug!(
         "POST /redfish/v1/Managers/{}/LogServices/BMC/Actions/LogService.ClearLog",
         manager_id
     );
+    check_privilege(Some(&session), PRIVILEGE_ACTION)?;
     validate_manager_id(&manager_id)?;
 
     if let Some(conn) = state.dbus_connection.as_deref() {

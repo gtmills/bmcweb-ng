@@ -13,7 +13,7 @@
 //! Thermal schema v1.8.0
 
 use axum::{
-    extract::{Path, State},
+    extract::{Extension, Path, State},
     http::StatusCode,
     response::Json,
     Json as JsonBody,
@@ -22,6 +22,8 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tracing::{debug, warn};
 
+use crate::auth::privilege::{check_privilege, PRIVILEGE_PATCH};
+use crate::auth::session::UserSession;
 use crate::dbus::{DbusClient, ZBusClient};
 use crate::AppState;
 
@@ -240,10 +242,12 @@ pub async fn get_chassis(
 ///   property: Asserted (bool) — true = LED on
 pub async fn patch_chassis(
     State(state): State<Arc<AppState>>,
+    Extension(session): Extension<UserSession>,
     Path(chassis_id): Path<String>,
     JsonBody(body): JsonBody<Value>,
 ) -> Result<Json<Value>, StatusCode> {
     debug!("PATCH /redfish/v1/Chassis/{}", chassis_id);
+    check_privilege(Some(&session), PRIVILEGE_PATCH)?;
     validate_chassis_id(&chassis_id)?;
 
     if let Some(led_state) = body.get("IndicatorLED").and_then(|v| v.as_str()) {

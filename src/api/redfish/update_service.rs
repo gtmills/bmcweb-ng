@@ -10,7 +10,7 @@
 //! SoftwareInventory schema v1.10.0
 
 use axum::{
-    extract::{Path, State},
+    extract::{Extension, Path, State},
     http::StatusCode,
     response::Json,
     Json as JsonBody,
@@ -20,6 +20,8 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
+use crate::auth::privilege::{check_privilege, PRIVILEGE_ACTION};
+use crate::auth::session::UserSession;
 use crate::services::{FirmwareInventory, UpdateProtocol, UpdateRequest, UpdateTarget};
 use crate::AppState;
 
@@ -299,12 +301,14 @@ pub async fn get_firmware_inventory(
 /// with a `Location` header pointing to the newly created Task.
 pub async fn simple_update(
     State(state): State<Arc<AppState>>,
+    Extension(session): Extension<UserSession>,
     JsonBody(body): JsonBody<SimpleUpdateRequest>,
 ) -> Result<(StatusCode, [(String, String); 1], Json<Value>), StatusCode> {
     debug!(
         "POST /redfish/v1/UpdateService/Actions/UpdateService.SimpleUpdate - URI: {}",
         body.image_uri
     );
+    check_privilege(Some(&session), PRIVILEGE_ACTION)?;
 
     if body.image_uri.is_empty() {
         warn!("Missing ImageURI in SimpleUpdate request");

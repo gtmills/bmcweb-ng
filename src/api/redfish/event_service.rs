@@ -14,7 +14,7 @@
 //! EventDestination schema v1.13.1
 
 use axum::{
-    extract::{Path, State},
+    extract::{Extension, Path, State},
     http::StatusCode,
     response::Json,
     Json as JsonBody,
@@ -24,6 +24,8 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
+use crate::auth::privilege::{check_privilege, PRIVILEGE_ACTION, PRIVILEGE_CONFIGURE_USERS, PRIVILEGE_PATCH};
+use crate::auth::session::UserSession;
 use crate::services::{EventMessage, EventSubscription, EventType, Protocol};
 use crate::AppState;
 
@@ -202,9 +204,11 @@ pub async fn get_event_service(
 /// subsequent GET calls return the updated values.
 pub async fn patch_event_service(
     State(state): State<Arc<AppState>>,
+    Extension(session): Extension<UserSession>,
     JsonBody(body): JsonBody<PatchEventServiceRequest>,
 ) -> Result<Json<Value>, StatusCode> {
     debug!("PATCH /redfish/v1/EventService");
+    check_privilege(Some(&session), PRIVILEGE_PATCH)?;
 
     if let Some(svc) = state.event_service.as_ref() {
         svc.update_settings(
@@ -263,9 +267,11 @@ pub async fn get_event_service_sse(
 /// Submits a test event to all matching subscribers for validation purposes.
 pub async fn submit_test_event(
     State(state): State<Arc<AppState>>,
+    Extension(session): Extension<UserSession>,
     JsonBody(body): JsonBody<SubmitTestEventRequest>,
 ) -> Result<StatusCode, StatusCode> {
     debug!("POST /redfish/v1/EventService/Actions/EventService.SubmitTestEvent");
+    check_privilege(Some(&session), PRIVILEGE_ACTION)?;
 
     let event_service = state
         .event_service
@@ -328,9 +334,11 @@ pub async fn get_subscriptions_collection(
 /// Creates a new event subscription.
 pub async fn create_subscription(
     State(state): State<Arc<AppState>>,
+    Extension(session): Extension<UserSession>,
     JsonBody(body): JsonBody<CreateSubscriptionRequest>,
 ) -> Result<(StatusCode, Json<Value>), StatusCode> {
     debug!("POST /redfish/v1/EventService/Subscriptions");
+    check_privilege(Some(&session), PRIVILEGE_CONFIGURE_USERS)?;
 
     if body.destination.is_empty() {
         warn!("Missing Destination in subscription creation request");
@@ -407,9 +415,11 @@ pub async fn get_subscription(
 /// DELETE /redfish/v1/EventService/Subscriptions/{subscription_id}
 pub async fn delete_subscription(
     State(state): State<Arc<AppState>>,
+    Extension(session): Extension<UserSession>,
     Path(sub_id): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
     debug!("DELETE /redfish/v1/EventService/Subscriptions/{}", sub_id);
+    check_privilege(Some(&session), PRIVILEGE_CONFIGURE_USERS)?;
 
     let event_service = state
         .event_service
@@ -462,9 +472,23 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_subscription_not_found() {
-        let config = Config::default();
-        let state = Arc::new(AppState::new(config));
-        let result = delete_subscription(State(state), Path("nonexistent".to_string())).await;
+        use std::net::{IpAddr, Ipv4Addr};
+        use crate::auth::session::SessionType;
+        let mut admin = crate::auth::session::UserSession::new(
+            "testadmin".to_string(),
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            SessionType::Token,
+            3600,
+        );
+        admin.set_role("Administrator".to_string());
+
+        let config = crate::config::Config::default();
+        let state = Arc::new(crate::AppState::new(config));
+        let result = delete_subscription(
+            State(state),
+            Extension(admin),
+            Path("nonexistent".to_string()),
+        ).await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), StatusCode::NOT_FOUND);
     }

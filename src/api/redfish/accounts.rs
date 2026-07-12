@@ -28,7 +28,7 @@
 //!   RemoteUser      → bool
 
 use axum::{
-    extract::{Path, State},
+    extract::{Extension, Path, State},
     http::StatusCode,
     response::Json,
     Json as JsonBody,
@@ -38,6 +38,8 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
+use crate::auth::privilege::{check_privilege, PRIVILEGE_CONFIGURE_USERS};
+use crate::auth::session::UserSession;
 use crate::dbus::{DbusClient, ZBusClient};
 use crate::AppState;
 
@@ -206,9 +208,11 @@ pub async fn get_account_service(
 ///   xyz.openbmc_project.User.Manager / AccountUnlockTimeout (u32)
 pub async fn patch_account_service(
     State(state): State<Arc<AppState>>,
+    Extension(session): Extension<UserSession>,
     JsonBody(body): JsonBody<Value>,
 ) -> Result<Json<Value>, StatusCode> {
     debug!("PATCH /redfish/v1/AccountService");
+    check_privilege(Some(&session), PRIVILEGE_CONFIGURE_USERS)?;
 
     if let Some(conn) = state.dbus_connection.as_deref() {
         let client = ZBusClient::from_connection(conn.clone());
@@ -378,9 +382,11 @@ pub async fn get_accounts_collection(
 ///   arg 2: userPassword is managed by PAM, not passed here
 pub async fn create_account(
     State(state): State<Arc<AppState>>,
+    Extension(session): Extension<UserSession>,
     JsonBody(body): JsonBody<CreateAccountRequest>,
 ) -> Result<(StatusCode, Json<Value>), StatusCode> {
     debug!("POST /redfish/v1/AccountService/Accounts - user: {}", body.username);
+    check_privilege(Some(&session), PRIVILEGE_CONFIGURE_USERS)?;
 
     if body.username.is_empty() || body.password.is_empty() {
         warn!("Missing username or password in account creation request");
@@ -530,10 +536,12 @@ pub async fn get_account(
 /// Updates account properties via DBus.
 pub async fn patch_account(
     State(state): State<Arc<AppState>>,
+    Extension(session): Extension<UserSession>,
     Path(account_id): Path<String>,
     JsonBody(body): JsonBody<PatchAccountRequest>,
 ) -> Result<Json<Value>, StatusCode> {
     debug!("PATCH /redfish/v1/AccountService/Accounts/{}", account_id);
+    check_privilege(Some(&session), PRIVILEGE_CONFIGURE_USERS)?;
 
     if let Some(ref role) = body.role_id {
         if !is_valid_role(role) {
@@ -598,9 +606,11 @@ pub async fn patch_account(
 /// Deletes a user account via `xyz.openbmc_project.User.Manager.DeleteUser`.
 pub async fn delete_account(
     State(state): State<Arc<AppState>>,
+    Extension(session): Extension<UserSession>,
     Path(account_id): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
     debug!("DELETE /redfish/v1/AccountService/Accounts/{}", account_id);
+    check_privilege(Some(&session), PRIVILEGE_CONFIGURE_USERS)?;
 
     if account_id == "root" {
         warn!("Attempt to delete the root account is not allowed");
@@ -678,6 +688,21 @@ pub async fn get_role(
     Err(StatusCode::NOT_FOUND)
 }
 
+/// Build an administrator UserSession for use in unit tests.
+#[cfg(test)]
+fn test_admin_session() -> UserSession {
+    use std::net::{IpAddr, Ipv4Addr};
+    use crate::auth::session::SessionType;
+    let mut s = UserSession::new(
+        "testadmin".to_string(),
+        IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+        SessionType::Token,
+        3600,
+    );
+    s.set_role("Administrator".to_string());
+    s
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -730,7 +755,11 @@ mod tests {
     async fn test_delete_account_root_forbidden() {
         let config = Config::default();
         let state = Arc::new(AppState::new(config));
-        let result = delete_account(State(state), Path("root".to_string())).await;
+        let result = delete_account(
+            State(state),
+            Extension(test_admin_session()),
+            Path("root".to_string()),
+        ).await;
         assert_eq!(result.unwrap_err(), StatusCode::FORBIDDEN);
     }
 
@@ -738,7 +767,11 @@ mod tests {
     async fn test_delete_account_no_dbus() {
         let config = Config::default();
         let state = Arc::new(AppState::new(config));
-        let result = delete_account(State(state), Path("testuser".to_string())).await;
+        let result = delete_account(
+            State(state),
+            Extension(test_admin_session()),
+            Path("testuser".to_string()),
+        ).await;
         // No DBus → 404
         assert_eq!(result.unwrap_err(), StatusCode::NOT_FOUND);
     }

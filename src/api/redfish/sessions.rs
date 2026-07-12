@@ -11,7 +11,7 @@
 //! Reference: DMTF DSP0266 Redfish Specification, SessionService schema v1.0.2
 
 use axum::{
-    extract::{Path, State},
+    extract::{Extension, Path, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json, Response},
     Json as JsonBody,
@@ -21,6 +21,7 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
+use crate::auth::privilege::{check_privilege, PRIVILEGE_CONFIGURE_USERS, PRIVILEGE_DELETE_SESSION, PRIVILEGE_PATCH};
 use crate::auth::session::{SessionType, UserSession};
 use crate::dbus::{DbusClient, ZBusClient};
 use crate::AppState;
@@ -160,9 +161,11 @@ pub async fn get_session_service(
 /// in subsequent GET calls and new session expiration calculations.
 pub async fn patch_session_service(
     State(state): State<Arc<AppState>>,
+    Extension(session): Extension<UserSession>,
     JsonBody(body): JsonBody<PatchSessionServiceRequest>,
 ) -> Result<Json<Value>, StatusCode> {
     debug!("PATCH /redfish/v1/SessionService");
+    check_privilege(Some(&session), PRIVILEGE_PATCH)?;
 
     if let Some(timeout) = body.session_timeout {
         let session_store = state
@@ -354,9 +357,24 @@ pub async fn get_session(
 /// unless they hold the `ConfigureUsers` privilege.
 pub async fn delete_session(
     State(state): State<Arc<AppState>>,
+    Extension(caller): Extension<UserSession>,
     Path(session_id): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
     debug!("DELETE /redfish/v1/SessionService/Sessions/{}", session_id);
+    // ConfigureSelf lets users delete their own session; ConfigureUsers
+    // (held by Administrator) lets them delete any session.
+    let allowed = {
+        let session_store = state.session_store.as_ref()
+            .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+        // Allow if the caller is deleting their own session
+        let is_own = session_store.get_session(&session_id)
+            .map(|s| s.username == caller.username)
+            .unwrap_or(false);
+        is_own || check_privilege(Some(&caller), PRIVILEGE_CONFIGURE_USERS).is_ok()
+    };
+    if !allowed {
+        check_privilege(Some(&caller), PRIVILEGE_DELETE_SESSION)?;
+    }
 
     let session_store = state
         .session_store
@@ -422,10 +440,23 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_session_not_found() {
+        use std::net::{IpAddr, Ipv4Addr};
+        let mut admin = UserSession::new(
+            "testadmin".to_string(),
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            SessionType::Token,
+            3600,
+        );
+        admin.set_role("Administrator".to_string());
+
         let config = Config::default();
         let state = Arc::new(AppState::new(config));
 
-        let result = delete_session(State(state), Path("nonexistent".to_string())).await;
+        let result = delete_session(
+            State(state),
+            Extension(admin),
+            Path("nonexistent".to_string()),
+        ).await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), StatusCode::NOT_FOUND);
     }
