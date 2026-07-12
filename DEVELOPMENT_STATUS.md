@@ -246,7 +246,7 @@ bmcweb-ng/
 | TelemetryService | ✅ | ✅ | GET + MetricDefinitions/Reports/ReportDefinitions |
 | Registries/JsonSchemas | ✅ | ✅ | Collection stubs |
 | DBus set_property | ✅ | ✅ | String/bool/int/float/string-array types |
-| DBus REST API | ✅ | ❌ | TODO |
+| DBus REST API | ✅ | ✅ | /bus/, /list/, /xyz/*, /org/* with GET+PUT |
 | KVM WebSocket | ✅ | ✅ | TCP proxy to obmc-ikvm on :5900 |
 | Serial Console | ✅ | ✅ | Full bidirectional proxy |
 | Virtual Media | ✅ | ✅ | UNIX socket proxy to nbd-proxy (/run/media-proxy/slot_0) |
@@ -322,7 +322,7 @@ Measured on OpenBMC `qemuarm` (emulated Cortex-A15, 256 MB RAM). Binary:
 ### Phase 4: Advanced Features
 - [x] WebSocket KVM (TCP proxy to obmc-ikvm :5900)
 - [x] Virtual Media (/vm/0/0 and /nbd/0 UNIX-socket proxy)
-- [ ] DBus REST API
+- [x] DBus REST API (/bus/, /list/, /xyz/*, /org/* GET + PUT)
 - [ ] mTLS authentication
 - [ ] LDAP integration
 
