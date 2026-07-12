@@ -111,9 +111,11 @@ pub fn router() -> Router<Arc<AppState>> {
                .delete(accounts::delete_account))
         .route("/AccountService/Roles", get(accounts::get_roles_collection))
         .route("/AccountService/Roles/:role_id", get(accounts::get_role))
-        // Registries and JsonSchemas stubs
+        // Registries and JsonSchemas
         .route("/Registries",    get(service_root::get_registries_collection))
+        .route("/Registries/:registry_id", get(service_root::get_registry))
         .route("/JsonSchemas",   get(service_root::get_json_schemas_collection))
+        .route("/JsonSchemas/:schema_id", get(service_root::get_json_schema))
         // EventService routes
         .route("/EventService", get(event_service::get_event_service)
                .patch(event_service::patch_event_service))

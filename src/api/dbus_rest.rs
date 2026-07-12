@@ -49,7 +49,7 @@ use crate::AppState;
 /// Mount this at `/` (or a prefix) from the HTTP server so that `/bus/`,
 /// `/list/`, `/xyz/<path>`, and `/org/<path>` are all reachable.
 pub fn dbus_rest_router() -> axum::Router<Arc<AppState>> {
-    use axum::routing::{get, put};
+    use axum::routing::get;
 
     axum::Router::new()
         .route("/bus/", get(get_buses))

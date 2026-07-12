@@ -212,7 +212,7 @@ pub async fn kvm_handler(
 ) -> impl IntoResponse {
     debug!("WebSocket upgrade request for /kvm/0");
 
-    ws.on_upgrade(|socket| handle_kvm(socket))
+    ws.on_upgrade(handle_kvm)
 }
 
 /// Handle an established KVM WebSocket connection.
