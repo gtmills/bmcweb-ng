@@ -55,8 +55,8 @@ pub fn dbus_rest_router() -> axum::Router<Arc<AppState>> {
         .route("/bus/", get(get_buses))
         .route("/bus/system/", get(get_bus_system))
         .route("/list/", get(get_list))
-        .route("/xyz/{*path}", get(get_dbus_object).put(put_dbus_object))
-        .route("/org/{*path}", get(get_dbus_object_org).put(put_dbus_object_org))
+        .route("/xyz/*path", get(get_dbus_object).put(put_dbus_object))
+        .route("/org/*path", get(get_dbus_object_org).put(put_dbus_object_org))
 }
 
 // ---------------------------------------------------------------------------

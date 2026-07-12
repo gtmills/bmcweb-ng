@@ -91,6 +91,11 @@ impl HttpServer {
         //   2. Overlaying the session creation routes with optional auth so the
         //      login endpoint accepts unauthenticated requests.
         let session_login_router = Router::new()
+            // GET /redfish/v1 (service root) is unauthenticated per Redfish spec §7.3.1
+            .route(
+                "/",
+                axum::routing::get(crate::api::redfish::service_root::get_service_root),
+            )
             .route(
                 "/SessionService/Sessions",
                 axum::routing::post(crate::api::redfish::sessions::create_session),

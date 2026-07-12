@@ -1,12 +1,22 @@
 # Testing bmcweb-ng with OpenBMC QEMU
 
-This document describes how to boot an OpenBMC `qemuarm` virtual machine and run
-a Redfish smoke test suite against it. The test validates that the Redfish API
-surface provided by bmcweb-ng matches what the upstream bmcweb delivers.
+This document describes how to boot OpenBMC virtual machines and run a Redfish
+smoke test suite against bmcweb-ng.  Two machine targets are supported:
+
+| Target | Machine model | Script | Notes |
+|--------|--------------|--------|-------|
+| Generic `qemuarm` | `virt` (Cortex-A15) | `run_bmcweb_ng_qemu.sh` | Original upstream OpenBMC |
+| **p10bmc / IBM Rainier** | `rainier-bmc` (AST2600) | `run_rainier_qemu.sh` | IBM fork, WIC qcow2 image |
+
+Jump to:
+- [Generic qemuarm (original)](#generic-qemuarm-original)
+- [p10bmc / IBM Rainier](#p10bmc--ibm-rainier-qemu)
 
 ---
 
-## Quick Start
+## Generic qemuarm (original)
+
+### Quick Start
 
 ```bash
 # From WSL2 / Linux — full cross-build + inject + test in one command:
@@ -307,8 +317,217 @@ kill $(cat target/qemu-test/qemu.pid)
 
 ---
 
+## p10bmc / IBM Rainier QEMU
+
+The IBM Rainier system uses an AST2600 BMC.  QEMU models this with the
+`rainier-bmc` machine type (added in QEMU 7.1.0).  The image layout is
+significantly different from generic `qemuarm`:
+
+| Aspect | qemuarm | Rainier |
+|--------|---------|---------|
+| QEMU machine | `virt,highmem=off` | `rainier-bmc,boot-emmc=false` |
+| Kernel format | `uImage` | `fitImage-linux.bin` (FIT) |
+| DTB | compiled into kernel | `aspeed-bmc-ibm-rainier.dtb` (separate) |
+| Initramfs | not used | `obmc-phosphor-initramfs.rootfs.cpio.xz` |
+| Root filesystem | raw `ext4` | `wic.qcow2` (partitioned, `PARTLABEL=rofs-a`) |
+| Block device arg | `-drive if=virtio` | `-drive if=sd,index=2` |
+| OpenBMC source | upstream `openbmc/openbmc` | IBM fork `ibm-openbmc/openbmc` |
+| Boot time (QEMU) | ~25s | ~60–90s |
+
+### Quick Start
+
+> **A p10bmc image must be built first.**  The generic upstream OpenBMC
+> `qemuarm` image will not work — it has the wrong kernel, DTB, and filesystem
+> layout for the `rainier-bmc` machine model.
+
+**First time** (builds the p10bmc image from source, ~60 min, ~80 GB):
+
+```bash
+BUILD_P10BMC=1 bash scripts/run_rainier_qemu.sh
+```
+
+**Subsequent runs** (image cached in `target/qemu-test/rainier-image/`):
+
+```bash
+bash scripts/run_rainier_qemu.sh
+```
+
+**If you already have a p10bmc Yocto deploy directory:**
+
+```bash
+IMAGEPATH=/path/to/tmp/deploy/images/rainier bash scripts/run_rainier_qemu.sh
+```
+
+The script performs the same 11-step flow as the qemuarm script but uses the
+`rainier-bmc` machine model, qcow2 overlay, and the IBM OpenBMC fork.
+
+### Prerequisites
+
+Same as qemuarm, plus:
+
+- **QEMU ≥ 7.1.0** — `rainier-bmc` machine was added in 7.1.  Check with
+  `qemu-system-arm -machine help | grep rainier`.  The Ubuntu 22.04 apt
+  package (`qemu-system-arm 6.2`) is **too old**.  Install the OpenBMC
+  Jenkins binary or build QEMU from source:
+
+  ```bash
+  # Download the OpenBMC-built QEMU binary (x86_64, statically linked)
+  wget https://jenkins.openbmc.org/job/latest-qemu-x86/lastSuccessfulBuild/artifact/qemu/build/qemu-system-arm
+  chmod +x qemu-system-arm
+  sudo mv qemu-system-arm /usr/local/bin/
+  sudo apt-get install -y libfdt1   # runtime dep for Jenkins binary
+  ```
+
+- **`qemu-utils`** — needed for `qemu-img create` (qcow2 overlay).
+  Auto-installed by the script via `apt_install qemu-utils`.
+
+### Image Files
+
+Four files are required in `target/qemu-test/rainier-image/`
+(or override with `IMAGEPATH=/path/to/dir`):
+
+```
+fitImage-linux.bin                        ← FIT image (kernel + built-in DTB)
+aspeed-bmc-ibm-rainier.dtb                ← Rainier BMC device tree blob
+obmc-phosphor-initramfs.rootfs.cpio.xz    ← initramfs (mounts squashfs overlay)
+obmc-phosphor-image.rootfs.wic.qcow2      ← SD card WIC image (contains rofs-a)
+```
+
+**Option A — Build from source** (recommended, ~60 min, ~80 GB):
+
+```bash
+BUILD_P10BMC=1 bash scripts/run_rainier_qemu.sh
+```
+
+This clones `ibm-openbmc/openbmc`, runs `bitbake obmc-phosphor-image` for the
+`rainier` machine, and copies the four files to `target/qemu-test/rainier-image/`.
+The build must happen on the WSL2 ext4 VHD (`~/...`), **not** on `/mnt/c/` —
+BitBake uses UNIX domain sockets that are not supported on NTFS.
+
+**Option B — Use a pre-built deploy directory**:
+
+```bash
+IMAGEPATH=/path/to/tmp/deploy/images/rainier bash scripts/run_rainier_qemu.sh
+```
+
+### QEMU Command Line
+
+The exact command issued by `run_rainier_qemu.sh`:
+
+```bash
+qemu-system-arm \
+    -M "rainier-bmc,boot-emmc=false" \
+    -nographic \
+    -kernel  fitImage-linux.bin \
+    -dtb     aspeed-bmc-ibm-rainier.dtb \
+    -initrd  obmc-phosphor-initramfs.rootfs.cpio.xz \
+    -drive   "file=rainier-rw.qcow2,if=sd,index=2,format=qcow2" \
+    -netdev  "user,id=net0,hostfwd=tcp::2443-:443,hostfwd=tcp::2222-:22,hostfwd=tcp::2080-:80" \
+    -net     "nic,netdev=net0" \
+    -append  "console=ttyS4,115200n8 rootwait root=PARTLABEL=rofs-a" \
+    -serial  "file:rainier-qemu.log" \
+    -pidfile "rainier-qemu.pid" \
+    -daemonize
+```
+
+The script passes a **qcow2 overlay** (`rainier-rw.qcow2`) backed by the
+pristine WIC image so the base image is never written to.  The overlay is
+deleted on exit.
+
+Port forwarding:
+
+| Host port | Guest port | Service |
+|-----------|-----------|---------|
+| 2443 | 443 | HTTPS (upstream bmcweb / bmcweb-ng TLS) |
+| 2222 | 22  | SSH |
+| 2080 | 80  | HTTP (bmcweb-ng plain HTTP for testing) |
+
+### bmcweb-ng Injection
+
+The p10bmc rootfs uses a read-only squashfs (`rofs-a`).  The binary is always
+injected into `/tmp` (a tmpfs) — never the rootfs:
+
+```bash
+# Cross-compile (once):
+cargo build --release --target arm-unknown-linux-gnueabihf
+
+# Stop upstream bmcweb:
+sshpass -p 0penBmc ssh -p 2222 root@localhost \
+    "systemctl stop bmcweb.socket bmcweb.service"
+
+# Copy binary to /tmp (tmpfs — not rofs-a):
+sshpass -p 0penBmc scp -O -P 2222 \
+    target/arm-unknown-linux-gnueabihf/release/bmcwebd-ng \
+    root@localhost:/tmp/bmcwebd-ng
+
+# Start bmcweb-ng on port 80 (plain HTTP):
+sshpass -p 0penBmc ssh -p 2222 root@localhost \
+    "chmod +x /tmp/bmcwebd-ng && RUST_LOG=info \
+     nohup /tmp/bmcwebd-ng --config /tmp/config.toml \
+     > /tmp/bmcweb-ng.log 2>&1 &"
+
+# Query via host port 2080:
+curl -s -u root:0penBmc http://localhost:2080/redfish/v1 | python3 -m json.tool
+```
+
+### Debugging
+
+```bash
+# Watch the Rainier boot log:
+tail -f target/qemu-test/rainier-qemu.log
+
+# SSH into the VM:
+sshpass -p 0penBmc ssh -p 2222 root@localhost
+
+# Query bmcweb-ng (plain HTTP):
+curl -s -u root:0penBmc http://localhost:2080/redfish/v1 | python3 -m json.tool
+
+# Query upstream bmcweb (HTTPS):
+curl -sk -u root:0penBmc https://localhost:2443/redfish/v1 | python3 -m json.tool
+
+# View bmcweb-ng log inside VM:
+sshpass -p 0penBmc ssh -p 2222 root@localhost "cat /tmp/bmcweb-ng.log"
+
+# Check if bmcweb-ng is running:
+sshpass -p 0penBmc ssh -p 2222 root@localhost "ps | grep bmcwebd-ng"
+
+# Stop QEMU:
+kill $(cat target/qemu-test/rainier-qemu.pid)
+```
+
+### Known Limitations (Rainier)
+
+- **QEMU ≥ 7.1 required**: The `rainier-bmc` machine type is not in the
+  Ubuntu 22.04 apt package.  Use the OpenBMC Jenkins binary or build from source.
+
+- **Slow boot (~60–90s)**: The Rainier machine initialises more phosphor
+  services than `qemuarm`.  The script polls for up to 10 minutes.
+
+- **Read-only rootfs**: `rofs-a` is a squashfs partition.  All writable state
+  (including the injected binary) must go to `/tmp` or `/var`.
+
+- **No eMMC in QEMU**: The `-M rainier-bmc,boot-emmc=false` flag is required.
+  Without it QEMU looks for an eMMC device that is not wired up, and the
+  machine fails to boot.
+
+- **`-nographic` required**: The Rainier machine model does not support the
+  `-display none` flag used by the qemuarm script.  Use `-nographic` instead;
+  combined with `-serial file:...` and `-daemonize` this is equivalent.
+
+- **TLS for testing**: bmcweb-ng is started on plain HTTP (:80) for testing so
+  no certificate management is needed.  Upstream bmcweb still answers HTTPS on
+  :443 (host 2443).
+
+- **DBus fallbacks**: Some OpenBMC services (e.g. `phosphor-virtual-sensor`,
+  IBM-specific inventory) may not be fully running in the QEMU environment.
+  bmcweb-ng falls back gracefully to placeholder values for those fields.
+
+---
+
 ## References
 
 - [OpenBMC run-qemu script](https://github.com/openbmc/openbmc/blob/main/scripts/run-qemu)
+- [IBM OpenBMC fork](https://github.com/ibm-openbmc/openbmc)
 - [QEMU virt machine](https://www.qemu.org/docs/master/system/arm/virt.html)
+- [QEMU rainier-bmc machine](https://www.qemu.org/docs/master/system/arm/aspeed.html)
 - [Redfish DSP0266 specification](https://www.dmtf.org/standards/redfish)

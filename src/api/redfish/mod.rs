@@ -22,7 +22,8 @@ use crate::AppState;
 /// Create the Redfish API router
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
-        .route("/", get(service_root::get_service_root))
+        // NOTE: GET / (service root) is intentionally NOT here.
+        // It is served unauthenticated from the open router in http.rs per Redfish spec §7.3.1.
         // Systems routes
         .route("/Systems", get(systems::get_systems_collection))
         .route("/Systems/:system_id",
