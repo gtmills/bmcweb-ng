@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# _run_validator.sh
+# run_validator.sh
 #
 # Boots rainier-bmc QEMU, injects bmcweb-ng, runs the DMTF Redfish Service
 # Validator against the live bmcweb-ng instance, then terminates QEMU.
@@ -7,7 +7,7 @@
 # All paths are derived from the script's own location — no hardcoded user paths.
 #
 # Usage:
-#   bash scripts/_run_validator.sh
+#   bash scripts/run_validator.sh
 #
 # Requirements:
 #   - qemu-system-arm with rainier-bmc machine support (>= 7.1)
@@ -53,11 +53,11 @@ rm -f /tmp/rainier-serial.sock
 sleep 1
 
 # ── Step 2: Run the e2e boot+inject script (background) ──────────────────────
-# _e2e_test.py boots QEMU, sets credentials, and injects bmcweb-ng.
+# e2e_test.py boots QEMU, sets credentials, and injects bmcweb-ng.
 # When SKIP_TEARDOWN=1 it does NOT terminate QEMU at the end, leaving it
 # running for us to run the validator against.
 echo ">>> Booting QEMU and injecting bmcweb-ng (background)..."
-SKIP_TEARDOWN=1 python3 "${SCRIPT_DIR}/_e2e_test.py" &
+SKIP_TEARDOWN=1 python3 "${SCRIPT_DIR}/e2e_test.py" &
 E2E_PID=$!
 
 # ── Step 3: Wait for bmcweb-ng on HTTP 8080 ──────────────────────────────────
