@@ -195,20 +195,10 @@ bmcweb-ng/
 
 ### ❌ Not Yet Implemented
 
-1. **Additional Redfish Resources**
-   - Registries / JsonSchemas
+1. **LDAP/Active Directory integration**
 
-2. **Additional Authentication**
-   - Mutual TLS (mTLS) certificate authentication
-   - LDAP/Active Directory integration
-
-3. **WebSocket — Additional Endpoints**
-   - KVM (Remote Frame Buffer) full implementation
-   - Virtual Media (`/vm/0/0`)
-   - NBD virtual media (`/nbd/0`)
-
-4. **DBus REST API** (`/api/v1`)
-   - Direct DBus object tree access (upstream feature)
+2. **WebSocket — Additional Endpoints**
+   - Virtual Media full data path (UNIX socket proxy wired; NBD protocol handling incomplete)
 
 ## Comparison with Original bmcweb
 

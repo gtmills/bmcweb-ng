@@ -5,12 +5,22 @@ set admin password via serial console, run smoke tests against
 upstream bmcweb, inject bmcweb-ng, run smoke tests against bmcweb-ng,
 print summary.
 
+Paths are derived from this script's location — no hardcoded user paths.
+The repo root is two directories above scripts/, i.e. scripts/../..
+
 Requires: python3-paramiko (apt install python3-paramiko)
 """
 import subprocess, sys, json, time, os, socket, threading
 
-IMGDIR    = "/mnt/c/Users/GunnarMills/Desktop/ai/downstream-public/bmcweb-ng/target/qemu-test/rainier-image"
-BMCWEB_NG = "/mnt/c/Users/GunnarMills/Desktop/ai/downstream-public/bmcweb-ng/target/arm-unknown-linux-gnueabihf/release/bmcwebd-ng"
+# ── Path resolution — no hardcoded user paths ─────────────────────────────────
+# This script lives at <repo>/scripts/_e2e_test.py
+# Repo root is therefore scripts/../../  (i.e. the bmcweb-ng checkout dir)
+_SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
+_REPO_ROOT  = os.path.normpath(os.path.join(_SCRIPT_DIR, ".."))
+
+IMGDIR    = os.path.join(_REPO_ROOT, "target", "qemu-test", "rainier-image")
+BMCWEB_NG = os.path.join(_REPO_ROOT, "target", "arm-unknown-linux-gnueabihf",
+                         "release", "bmcwebd-ng")
 LOG        = "/tmp/rainier_qemu.log"
 SERIAL_SOCK= "/tmp/rainier-serial.sock"
 HOST       = "127.0.0.1"
@@ -42,6 +52,18 @@ def check(name, val, expected):
         print(f"         expect: {repr(expected)}", flush=True)
         FAIL += 1
 
+def check_in(name, val, choices):
+    """Pass if val is one of the given choices."""
+    global PASS, FAIL
+    if val in choices:
+        print(f"  PASS  {name}", flush=True)
+        PASS += 1
+    else:
+        print(f"  FAIL  {name}", flush=True)
+        print(f"         got:    {repr(val)}", flush=True)
+        print(f"         expect one of: {choices}", flush=True)
+        FAIL += 1
+
 def http_get(url, auth=None, tls=True, verbose=False):
     cmd = ["curl", "-s", "-w", "\n__HTTP_CODE__:%{http_code}", "--max-time", "15"]
     if tls: cmd += ["-k"]
@@ -52,8 +74,29 @@ def http_get(url, auth=None, tls=True, verbose=False):
     body = parts[0]
     code = parts[1].strip() if len(parts) > 1 else "?"
     if verbose: print(f"  HTTP {code}  body[:300]: {body[:300]}", flush=True)
-    try: return json.loads(body)
-    except: return {"__raw__": body[:300], "__code__": code}
+    try:
+        d = json.loads(body)
+        d["__code__"] = code
+        return d
+    except:
+        return {"__raw__": body[:300], "__code__": code}
+
+def http_post(url, body_dict, auth=None, tls=True):
+    """POST JSON body; returns (parsed_dict_or_raw, http_code_str)."""
+    body = json.dumps(body_dict)
+    cmd = ["curl", "-s", "-w", "\n__HTTP_CODE__:%{http_code}", "--max-time", "15",
+           "-X", "POST", "-H", "Content-Type: application/json", "-d", body]
+    if tls: cmd += ["-k"]
+    if auth: cmd += ["-u", f"{auth[0]}:{auth[1]}"]
+    cmd.append(url)
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    parts = r.stdout.rsplit("\n__HTTP_CODE__:", 1)
+    body_out = parts[0]
+    code = parts[1].strip() if len(parts) > 1 else "?"
+    try:
+        return json.loads(body_out), code
+    except:
+        return {"__raw__": body_out[:300]}, code
 
 def http_code(url, tls=True, auth=None):
     cmd = ["curl", "-s", "--max-time", "5", "-o", "/dev/null", "-w", "%{http_code}"]
@@ -104,28 +147,6 @@ def _start_serial(retries=30, delay=2):
                 log(f"  Serial connect attempt {attempt+1}: {e}")
         time.sleep(delay)
     return False
-
-def _serial_read_until(patterns, timeout=15):
-    """
-    Wait until one of the `patterns` strings appears in the accumulated
-    serial buffer, or timeout expires.
-    Returns (new_text_since_last_read, matched_pattern_or_None).
-    """
-    deadline = time.time() + timeout
-    last_pos = 0
-    while time.time() < deadline:
-        with _serial_buf_lock:
-            buf = _serial_buf
-        text = buf.decode(errors="replace")
-        for p in patterns:
-            idx = text.find(p, last_pos)
-            if idx >= 0:
-                new_text = text[last_pos : idx + len(p)]
-                return new_text, p
-        time.sleep(0.1)
-    with _serial_buf_lock:
-        text = _serial_buf.decode(errors="replace")
-    return text[last_pos:], None
 
 def _serial_send(text):
     """Write text to the serial socket."""
@@ -186,16 +207,13 @@ def _try_serial_login(username, current_pw, new_pw=None, timeout_pw=8, timeout_s
             log(f"    Logged in as {username}")
             return True
         if m3 in ("Current password:", "Current Password:"):
-            # PAM forces change: already asked for current password again
-            # Send current password
             mark4 = _serial_mark()
             _serial_send(f"{current_pw}\r\n")
             out4, m4 = _serial_read_from(mark4, ["New password", "new password"], timeout=8)
             log(f"    after current pw (2nd): m4={m4!r}")
-            m3 = m4   # fall through to "New password" handling below
+            m3 = m4
             out3 = out4
         if m3 in ("New password", "new password"):
-            # PAM forced password change flow
             use_new = new_pw if new_pw else current_pw
             log(f"    PAM forced change — setting new password to: {use_new!r}")
             mark5 = _serial_mark()
@@ -209,9 +227,7 @@ def _try_serial_login(username, current_pw, new_pw=None, timeout_pw=8, timeout_s
             if m6 in ("# ", "#\r\n", "$ "):
                 log(f"    Password changed, logged in as {username}")
                 return True
-            # Some systems drop back to login: after password change — try logging in
             if m6 == "login:":
-                # Password was changed, now log in with new password
                 log(f"    Password changed, logging in with new password...")
                 return _try_serial_login(username, use_new, new_pw=None, timeout_pw=6)
     return False
@@ -221,11 +237,9 @@ def serial_login_and_run(commands, retries=30, delay=5):
     Wait for a login prompt, try several user/pass combos, then run commands.
     Returns combined output string or None on failure.
     """
-    # Credentials to try in order: (username, current_pw, new_pw_for_forced_change)
-    # admin:admin has PAM force-change; new_pw=BMCWEB_PW sets the new password
     CREDS_TO_TRY = [
-        ("admin", "admin",   BMCWEB_PW),   # most likely; PAM will force change
-        ("admin", BMCWEB_PW, None),         # if already changed in a prior run
+        ("admin", "admin",   BMCWEB_PW),
+        ("admin", BMCWEB_PW, None),
         ("admin", "0penBmc", BMCWEB_PW),
         ("root",  "",        None),
         ("root",  "0penBmc", None),
@@ -246,24 +260,21 @@ def serial_login_and_run(commands, retries=30, delay=5):
                 if _try_serial_login(u, p, new_pw=np):
                     log(f"  Logged in as {u!r}")
                     break
-                # After a failed attempt, wait for the next login: prompt
                 _, _ = _serial_read_from(_serial_mark(), ["login:"], timeout=10)
             else:
                 log("  All login attempts failed on serial console")
                 time.sleep(delay)
                 continue
-            break   # break outer for loop too
+            break
         time.sleep(delay)
     else:
         log("  Serial: could not get shell after all retries")
         return None
 
-    # We have a shell — run the commands
     all_output = ""
     for cmd in commands:
         mark = _serial_mark()
         _serial_send(cmd + "\r\n")
-        # Use longer timeout for slow commands: curl download, sleep, systemctl
         cmd_timeout = 60 if any(k in cmd for k in ("curl", "sleep", "systemctl", "cat /tmp")) else 20
         out, _ = _serial_read_from(mark, ["# ", "#\r\n", "$ "], timeout=cmd_timeout)
         log(f"  serial> {cmd!r}  →  ...{out.strip()[-200:]!r}")
@@ -316,26 +327,22 @@ def ssh_run(cmd_str, timeout=30):
         _ssh_client = None
         return "", str(e), 1
 
-def scp_put(local_path, remote_path):
-    """Upload a file over SFTP (paramiko); returns True on success."""
-    client = _open_ssh()
-    if client is None:
-        return False
-    try:
-        sftp = client.open_sftp()
-        log(f"  Uploading {os.path.getsize(local_path)//1024} KB...")
-        sftp.put(local_path, remote_path)
-        sftp.close()
-        return True
-    except Exception as e:
-        log(f"  SFTP put error: {e}")
-        return False
-
 # ── 1. Launch QEMU ────────────────────────────────────────────────────────────
 section("Launching rainier-bmc QEMU")
+log(f"  Repo root : {_REPO_ROOT}")
+log(f"  Image dir : {IMGDIR}")
+log(f"  Binary    : {BMCWEB_NG}")
+
+if not os.path.isdir(IMGDIR):
+    log(f"  ERROR: image dir not found: {IMGDIR}")
+    sys.exit(1)
+if not os.path.isfile(BMCWEB_NG):
+    log(f"  ERROR: bmcwebd-ng binary not found: {BMCWEB_NG}")
+    log("  Run: cargo build --release --target arm-unknown-linux-gnueabihf")
+    sys.exit(1)
+
 subprocess.run(["pkill", "-f", "qemu-system-arm"], capture_output=True)
 time.sleep(1)
-# Remove stale socket
 subprocess.run(["rm", "-f", SERIAL_SOCK], capture_output=True)
 
 qemu_cmd = [
@@ -350,8 +357,7 @@ qemu_cmd = [
     ),
     # The kernel outputs to ttyS0 (QEMU serial0 = first -serial flag),
     # regardless of console= cmdline arg under QEMU 8.2.x with rainier-bmc.
-    # Map serial0 → Unix socket for interactive console I/O.
-    "-serial", f"unix:{SERIAL_SOCK},server,nowait",  # serial0 / ttyS0
+    "-serial", f"unix:{SERIAL_SOCK},server,nowait",
     "-net", "nic",
     "-net", (
         f"user"
@@ -365,7 +371,6 @@ with open(LOG, "w") as lf:
     proc = subprocess.Popen(qemu_cmd, stdout=lf, stderr=lf)
 log(f"QEMU pid={proc.pid}")
 
-# Start the serial background reader immediately
 _start_serial(retries=30, delay=2)
 
 # ── 2. Wait for bmcweb ────────────────────────────────────────────────────────
@@ -394,29 +399,17 @@ else:
 # ── 3. Set admin password via serial console ──────────────────────────────────
 section("Setting admin password via serial console")
 
-# Wait a bit for the console to be fully settled
 time.sleep(5)
-
-# Check if serial reader is connected
 serial_available = _serial_sock_raw is not None
 log(f"  Serial reader connected: {serial_available}")
 if not serial_available:
-    # Try once more (QEMU may have taken a moment to create the socket)
     serial_available = _start_serial(retries=5, delay=2)
     log(f"  Serial reader retry: connected={serial_available}")
 
 ssh_ok = False
-ADMIN_PW_CURRENT = "admin"   # confirmed by shadow hash check
+ADMIN_PW_CURRENT = "admin"
 CREDS = ("admin", BMCWEB_PW)
 
-# Strategy:
-# 1. Try admin:admin for Redfish (may work if PasswordChangeRequired not set)
-# 2. If 403, use serial console to complete PAM force-change (admin:admin → new_pw)
-#    This changes the OS password AND may clear the PAM flag
-# 3. Use Redfish PATCH to change admin password (clears bmcweb's PasswordChangeRequired)
-# 4. Test Redfish with the new password
-
-# Step 1: Quick check with admin:admin
 log("  Testing admin:admin for Redfish...")
 rc0 = http_code(f"https://{HOST}:{HTTPS}/redfish/v1/Systems", tls=True, auth=("admin", "admin"))
 log(f"  admin:admin → HTTP {rc0}")
@@ -425,29 +418,21 @@ if rc0 == "200":
     CREDS = ("admin", "admin")
     ssh_ok = True
 
-# Step 2: Serial console — complete PAM forced-change flow
 if not ssh_ok and serial_available:
     log("  Using serial console to complete PAM password change...")
     result = serial_login_and_run([
-        # We're logged in as admin (after PAM forced change set pw to BMCWEB_PW)
-        # Confirm the new password took effect
         "id && echo WHOAMI_OK",
         "cat /etc/passwd | grep admin",
     ], retries=15, delay=5)
     if result is not None:
         log(f"  Serial login succeeded (output len={len(result)})")
-        ADMIN_PW_CURRENT = BMCWEB_PW   # PAM changed it to BMCWEB_PW
+        ADMIN_PW_CURRENT = BMCWEB_PW
     else:
         log("  Serial login failed")
 
-# Step 3: Redfish PATCH to change admin password (clears PasswordChangeRequired)
-# We must PATCH using the OLD password (admin:admin or admin:BMCWEB_PW)
-# regardless of whether the OS password has changed or not.
-# Try both current passwords.
 def redfish_patch_password(auth_pw, new_pw):
     """PATCH admin's Redfish password. Returns HTTP status code string."""
-    import json as _json
-    body = _json.dumps({"Password": new_pw})
+    body = json.dumps({"Password": new_pw})
     cmd = [
         "curl", "-sk", "-o", "/dev/null", "-w", "%{http_code}",
         "-X", "PATCH",
@@ -469,7 +454,6 @@ for try_pw in ["admin", BMCWEB_PW, "0penBmc"]:
         break
     time.sleep(1)
 
-# Step 4: Verify Redfish works with new password
 time.sleep(3)
 for try_pw in [BMCWEB_PW, "admin", "0penBmc"]:
     rc_verify = http_code(f"https://{HOST}:{HTTPS}/redfish/v1/Systems", tls=True, auth=("admin", try_pw))
@@ -485,14 +469,8 @@ if not ssh_ok:
     log(f"  Redfish auth still failing — will run tests anyway with admin:{ADMIN_PW_CURRENT}")
     CREDS = ("admin", ADMIN_PW_CURRENT)
 
-# ── 4. Try SSH for binary injection ──────────────────────────────────────────
+# ── 4. SSH note ───────────────────────────────────────────────────────────────
 section("Testing SSH (for binary injection)")
-# SSH only works for users in 'shellaccess' group: root (locked), service (shell=/bin/sh)
-# Neither root nor admin can SSH; we must use serial console for injection.
-# Mark ssh_ok based on whether we can inject via serial (ssh_ok is reused for injection)
-# Actually for binary injection we need either SSH or serial console.
-# Since root is locked and admin has no SSH access, we use the serial console
-# for binary injection via base64-encoded transfer.
 log("  SSH blocked by IBM policy (admin not in shellaccess group)")
 log(f"  Using Redfish creds: {CREDS[0]}:{CREDS[1]}")
 
@@ -500,36 +478,51 @@ log(f"  Using Redfish creds: {CREDS[0]}:{CREDS[1]}")
 section(f"Smoke tests — upstream bmcweb  https://{HOST}:{HTTPS}")
 base = f"https://{HOST}:{HTTPS}"
 
+# ServiceRoot
 d = http_get(f"{base}/redfish/v1", auth=CREDS)
 check("/redfish/v1 → RedfishVersion is string", isinstance(d.get("RedfishVersion"), str), True)
 check("/redfish/v1 → @odata.type contains ServiceRoot",
       "ServiceRoot" in d.get("@odata.type", ""), True)
-time.sleep(2)
+time.sleep(1)
 
+# Systems collection
 d = http_get(f"{base}/redfish/v1/Systems", auth=CREDS, verbose=True)
 check("/redfish/v1/Systems → @odata.type present", d.get("@odata.type") is not None, True)
-time.sleep(2)
+check("/redfish/v1/Systems → Members is list", isinstance(d.get("Members"), list), True)
+time.sleep(1)
 
+# System instance
+d = http_get(f"{base}/redfish/v1/Systems/system", auth=CREDS)
+check("/redfish/v1/Systems/system → @odata.type present", d.get("@odata.type") is not None, True)
+check("/redfish/v1/Systems/system → Id present", d.get("Id") is not None, True)
+time.sleep(1)
+
+# Chassis
 d = http_get(f"{base}/redfish/v1/Chassis", auth=CREDS, verbose=True)
 check("/redfish/v1/Chassis → @odata.type present", d.get("@odata.type") is not None, True)
-time.sleep(2)
+time.sleep(1)
 
+# Managers
 d = http_get(f"{base}/redfish/v1/Managers", auth=CREDS, verbose=True)
 check("/redfish/v1/Managers → @odata.type present", d.get("@odata.type") is not None, True)
-time.sleep(2)
+time.sleep(1)
 
+# AccountService
 d = http_get(f"{base}/redfish/v1/AccountService", auth=CREDS, verbose=True)
 check("/redfish/v1/AccountService → @odata.type present", d.get("@odata.type") is not None, True)
+time.sleep(1)
+
+# SessionService
+d = http_get(f"{base}/redfish/v1/SessionService", auth=CREDS)
+check("/redfish/v1/SessionService → @odata.type present", d.get("@odata.type") is not None, True)
+time.sleep(1)
 
 baseline_fail = FAIL
 
 # ── 6. Inject bmcweb-ng via HTTP download from host ──────────────────────────
-# We can't SSH (root locked, admin not in shellaccess).
-# Strategy: spin up a Python HTTP server on the WSL host serving the binary,
-# then wget it from inside QEMU via QEMU user-net (host = 10.0.2.2).
 section("Injecting bmcweb-ng via HTTP download")
 
-HTTP_SERVE_PORT = 9191   # port on host to serve the binary
+HTTP_SERVE_PORT = 9191
 
 def _serve_binary():
     """Serve files from the binary directory and /tmp via a simple HTTP server."""
@@ -539,7 +532,6 @@ def _serve_binary():
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
-            # Serve from binary dir first, then /tmp
             filename = _os.path.basename(self.path)
             for search_dir in [bin_dir, "/tmp"]:
                 fpath = _os.path.join(search_dir, filename)
@@ -553,7 +545,7 @@ def _serve_binary():
                     return
             self.send_response(404)
             self.end_headers()
-        def log_message(self, *a): pass  # suppress access log
+        def log_message(self, *a): pass
 
     with socketserver.TCPServer(("0.0.0.0", HTTP_SERVE_PORT), Handler) as httpd:
         httpd.serve_forever()
@@ -568,7 +560,6 @@ if not serial_available:
     log("  Serial console not available — skipping bmcweb-ng injection")
     FAIL += 1
 else:
-    # Write config file to serve alongside the binary
     cfg_content = (
         "[server]\n"
         f'bind_address = "0.0.0.0"\n'
@@ -590,26 +581,13 @@ else:
         _f.write(cfg_content)
     log(f"  Config written to {cfg_path}")
 
-    # Do all injection inside a single serial login session to avoid re-auth issues.
-    # The marker strings here do NOT appear in the commands sent (to avoid false echoes).
     inj_result = serial_login_and_run([
-        # Download binary via curl
-        (
-            f"curl -s -o /tmp/bmcwebd-ng http://10.0.2.2:{HTTP_SERVE_PORT}/{os.path.basename(BMCWEB_NG)}"
-        ),
-        # Download config via curl
-        (
-            f"curl -s -o /tmp/bmcwng.toml http://10.0.2.2:{HTTP_SERVE_PORT}/bmcwng_host.toml"
-        ),
-        # Verify downloads
+        f"curl -s -o /tmp/bmcwebd-ng http://10.0.2.2:{HTTP_SERVE_PORT}/{os.path.basename(BMCWEB_NG)}",
+        f"curl -s -o /tmp/bmcwng.toml http://10.0.2.2:{HTTP_SERVE_PORT}/bmcwng_host.toml",
         "ls -la /tmp/bmcwebd-ng /tmp/bmcwng.toml 2>&1",
-        # Make executable
         "chmod +x /tmp/bmcwebd-ng",
-        # Stop upstream bmcweb
         "systemctl stop bmcweb 2>&1; echo BMCWEB_STOPPED",
-        # Launch bmcweb-ng in background (separate command so prompt returns cleanly)
         "nohup /tmp/bmcwebd-ng --config /tmp/bmcwng.toml >/tmp/bmcwebd-ng.log 2>&1 &",
-        # Give it time to start, then check process and log
         "sleep 5",
         "ps | grep bmcwebd",
         "cat /tmp/bmcwebd-ng.log",
@@ -619,7 +597,6 @@ else:
     if inj_result:
         log(f"  Injection output tail: {inj_result.strip()[-600:]!r}")
 
-    # Check that the binary was actually downloaded (> 1MB = 1000 bytes in ls -la)
     ng_download_ok = (
         inj_result is not None
         and "No such file" not in inj_result
@@ -628,8 +605,6 @@ else:
     if not ng_download_ok:
         log(f"  FAIL: injection via serial failed (no binary found)"); FAIL += 1
     else:
-
-        # Wait for bmcweb-ng on HTTP port 8080 (forwarded to NG_PORT=8080)
         ng_deadline = time.time() + 90
         ng_up = False
         while time.time() < ng_deadline:
@@ -642,30 +617,290 @@ else:
             log("  FAIL: bmcweb-ng did not come up within 90s"); FAIL += 1
         else:
             # ── 7. bmcweb-ng smoke tests ──────────────────────────────────────
+            # Tests cover every collection and major instance endpoint exposed
+            # by the router in src/api/redfish/mod.rs, plus session creation,
+            # account listing, and negative-path (404) checks.
             section(f"Smoke tests — bmcweb-ng  http://{HOST}:{NG_PORT}")
             ng = f"http://{HOST}:{NG_PORT}"
 
-            # /redfish/v1 should be unauthenticated per spec (no auth param)
+            # ── ServiceRoot (unauthenticated per Redfish spec §7.3.1) ─────────
             d = http_get(f"{ng}/redfish/v1", tls=False, verbose=True)
             check("[ng] /redfish/v1 → RedfishVersion present",
                   isinstance(d.get("RedfishVersion"), str), True)
             check("[ng] /redfish/v1 → @odata.type contains ServiceRoot",
                   "ServiceRoot" in d.get("@odata.type", ""), True)
+            check("[ng] /redfish/v1 → Systems link present",
+                  d.get("Systems", {}).get("@odata.id") == "/redfish/v1/Systems", True)
+            check("[ng] /redfish/v1 → Chassis link present",
+                  d.get("Chassis", {}).get("@odata.id") == "/redfish/v1/Chassis", True)
+            check("[ng] /redfish/v1 → Managers link present",
+                  d.get("Managers", {}).get("@odata.id") == "/redfish/v1/Managers", True)
+            check("[ng] /redfish/v1 → @odata.id is /redfish/v1",
+                  d.get("@odata.id") == "/redfish/v1", True)
+            check("[ng] /redfish/v1 → HTTP 200 unauthenticated",
+                  d.get("__code__") == "200", True)
+            time.sleep(1)
 
-            # Authenticated endpoints use CREDS (same admin account)
+            # ── Systems ──────────────────────────────────────────────────────
             d = http_get(f"{ng}/redfish/v1/Systems", tls=False, auth=CREDS, verbose=True)
             check("[ng] /redfish/v1/Systems → @odata.type contains Collection",
                   "Collection" in d.get("@odata.type", ""), True)
+            check("[ng] /redfish/v1/Systems → Members is list",
+                  isinstance(d.get("Members"), list), True)
+            check("[ng] /redfish/v1/Systems → Members@odata.count >= 1",
+                  isinstance(d.get("Members@odata.count"), int) and d.get("Members@odata.count", 0) >= 1, True)
+            time.sleep(1)
 
+            d = http_get(f"{ng}/redfish/v1/Systems/system", tls=False, auth=CREDS)
+            check("[ng] /redfish/v1/Systems/system → @odata.type present",
+                  d.get("@odata.type") is not None, True)
+            check("[ng] /redfish/v1/Systems/system → Id == 'system'",
+                  d.get("Id") == "system", True)
+            check("[ng] /redfish/v1/Systems/system → Name present",
+                  isinstance(d.get("Name"), str), True)
+            check("[ng] /redfish/v1/Systems/system → @odata.id correct",
+                  d.get("@odata.id") == "/redfish/v1/Systems/system", True)
+            time.sleep(1)
+
+            d = http_get(f"{ng}/redfish/v1/Systems/system/Processors", tls=False, auth=CREDS)
+            check("[ng] /Systems/system/Processors → @odata.type present",
+                  d.get("@odata.type") is not None, True)
+            time.sleep(1)
+
+            d = http_get(f"{ng}/redfish/v1/Systems/system/Memory", tls=False, auth=CREDS)
+            check("[ng] /Systems/system/Memory → @odata.type present",
+                  d.get("@odata.type") is not None, True)
+            time.sleep(1)
+
+            d = http_get(f"{ng}/redfish/v1/Systems/system/Storage", tls=False, auth=CREDS)
+            check("[ng] /Systems/system/Storage → @odata.type present",
+                  d.get("@odata.type") is not None, True)
+            time.sleep(1)
+
+            d = http_get(f"{ng}/redfish/v1/Systems/system/EthernetInterfaces", tls=False, auth=CREDS)
+            check("[ng] /Systems/system/EthernetInterfaces → @odata.type present",
+                  d.get("@odata.type") is not None, True)
+            time.sleep(1)
+
+            d = http_get(f"{ng}/redfish/v1/Systems/system/LogServices", tls=False, auth=CREDS)
+            check("[ng] /Systems/system/LogServices → @odata.type present",
+                  d.get("@odata.type") is not None, True)
+            time.sleep(1)
+
+            d = http_get(f"{ng}/redfish/v1/Systems/system/LogServices/EventLog", tls=False, auth=CREDS)
+            check("[ng] /Systems/system/LogServices/EventLog → @odata.type present",
+                  d.get("@odata.type") is not None, True)
+            time.sleep(1)
+
+            d = http_get(f"{ng}/redfish/v1/Systems/system/LogServices/EventLog/Entries", tls=False, auth=CREDS, verbose=True)
+            check("[ng] /Systems/system/LogServices/EventLog/Entries → HTTP 200",
+                  d.get("__code__") == "200", True)
+            check("[ng] /Systems/system/LogServices/EventLog/Entries → @odata.type present",
+                  d.get("@odata.type") is not None, True)
+            time.sleep(1)
+
+            # 404 for a non-existent system
+            c = http_code(f"{ng}/redfish/v1/Systems/nonexistent", tls=False, auth=CREDS)
+            check("[ng] /Systems/nonexistent → HTTP 404",
+                  c == "404", True)
+            time.sleep(1)
+
+            # ── Chassis ──────────────────────────────────────────────────────
             d = http_get(f"{ng}/redfish/v1/Chassis", tls=False, auth=CREDS, verbose=True)
             check("[ng] /redfish/v1/Chassis → @odata.type contains Collection",
                   "Collection" in d.get("@odata.type", ""), True)
+            time.sleep(1)
 
+            d = http_get(f"{ng}/redfish/v1/Chassis/chassis", tls=False, auth=CREDS)
+            check("[ng] /Chassis/chassis → @odata.type present",
+                  d.get("@odata.type") is not None, True)
+            check("[ng] /Chassis/chassis → Id == 'chassis'",
+                  d.get("Id") == "chassis", True)
+            time.sleep(1)
+
+            d = http_get(f"{ng}/redfish/v1/Chassis/chassis/Power", tls=False, auth=CREDS)
+            check("[ng] /Chassis/chassis/Power → @odata.type present",
+                  d.get("@odata.type") is not None, True)
+            time.sleep(1)
+
+            d = http_get(f"{ng}/redfish/v1/Chassis/chassis/Thermal", tls=False, auth=CREDS)
+            check("[ng] /Chassis/chassis/Thermal → @odata.type present",
+                  d.get("@odata.type") is not None, True)
+            time.sleep(1)
+
+            d = http_get(f"{ng}/redfish/v1/Chassis/chassis/Sensors", tls=False, auth=CREDS)
+            check("[ng] /Chassis/chassis/Sensors → @odata.type present",
+                  d.get("@odata.type") is not None, True)
+            time.sleep(1)
+
+            # ── Managers ─────────────────────────────────────────────────────
             d = http_get(f"{ng}/redfish/v1/Managers", tls=False, auth=CREDS, verbose=True)
             check("[ng] /redfish/v1/Managers → @odata.type contains Collection",
                   "Collection" in d.get("@odata.type", ""), True)
+            time.sleep(1)
+
+            d = http_get(f"{ng}/redfish/v1/Managers/bmc", tls=False, auth=CREDS)
+            check("[ng] /Managers/bmc → @odata.type present",
+                  d.get("@odata.type") is not None, True)
+            check("[ng] /Managers/bmc → Id == 'bmc'",
+                  d.get("Id") == "bmc", True)
+            time.sleep(1)
+
+            d = http_get(f"{ng}/redfish/v1/Managers/bmc/NetworkProtocol", tls=False, auth=CREDS)
+            check("[ng] /Managers/bmc/NetworkProtocol → @odata.type present",
+                  d.get("@odata.type") is not None, True)
+            time.sleep(1)
+
+            d = http_get(f"{ng}/redfish/v1/Managers/bmc/EthernetInterfaces", tls=False, auth=CREDS)
+            check("[ng] /Managers/bmc/EthernetInterfaces → @odata.type present",
+                  d.get("@odata.type") is not None, True)
+            time.sleep(1)
+
+            d = http_get(f"{ng}/redfish/v1/Managers/bmc/LogServices", tls=False, auth=CREDS)
+            check("[ng] /Managers/bmc/LogServices → @odata.type present",
+                  d.get("@odata.type") is not None, True)
+            time.sleep(1)
+
+            d = http_get(f"{ng}/redfish/v1/Managers/bmc/LogServices/BMC", tls=False, auth=CREDS)
+            check("[ng] /Managers/bmc/LogServices/BMC → @odata.type present",
+                  d.get("@odata.type") is not None, True)
+            time.sleep(1)
+
+            d = http_get(f"{ng}/redfish/v1/Managers/bmc/LogServices/BMC/Entries", tls=False, auth=CREDS)
+            check("[ng] /Managers/bmc/LogServices/BMC/Entries → @odata.type present",
+                  d.get("@odata.type") is not None, True)
+            time.sleep(1)
+
+            # ── SessionService ────────────────────────────────────────────────
+            d = http_get(f"{ng}/redfish/v1/SessionService", tls=False, auth=CREDS)
+            check("[ng] /SessionService → @odata.type present",
+                  d.get("@odata.type") is not None, True)
+            time.sleep(1)
+
+            d = http_get(f"{ng}/redfish/v1/SessionService/Sessions", tls=False, auth=CREDS)
+            check("[ng] /SessionService/Sessions → @odata.type present",
+                  d.get("@odata.type") is not None, True)
+            check("[ng] /SessionService/Sessions → Members is list",
+                  isinstance(d.get("Members"), list), True)
+            time.sleep(1)
+
+            # Session creation (POST — unauthenticated login endpoint)
+            sess_body, sess_code = http_post(
+                f"{ng}/redfish/v1/SessionService/Sessions",
+                {"UserName": CREDS[0], "Password": CREDS[1]},
+                tls=False
+            )
+            check("[ng] POST /SessionService/Sessions → HTTP 201 or 200",
+                  sess_code in ("200", "201"), True)
+            time.sleep(1)
+
+            # ── AccountService ────────────────────────────────────────────────
+            d = http_get(f"{ng}/redfish/v1/AccountService", tls=False, auth=CREDS, verbose=True)
+            check("[ng] /AccountService → @odata.type present",
+                  d.get("@odata.type") is not None, True)
+            time.sleep(1)
+
+            d = http_get(f"{ng}/redfish/v1/AccountService/Accounts", tls=False, auth=CREDS)
+            check("[ng] /AccountService/Accounts → @odata.type present",
+                  d.get("@odata.type") is not None, True)
+            check("[ng] /AccountService/Accounts → Members is list",
+                  isinstance(d.get("Members"), list), True)
+            time.sleep(1)
+
+            d = http_get(f"{ng}/redfish/v1/AccountService/Roles", tls=False, auth=CREDS)
+            check("[ng] /AccountService/Roles → @odata.type present",
+                  d.get("@odata.type") is not None, True)
+            check("[ng] /AccountService/Roles → Members is list",
+                  isinstance(d.get("Members"), list), True)
+            time.sleep(1)
+
+            # Built-in Administrator role
+            d = http_get(f"{ng}/redfish/v1/AccountService/Roles/Administrator", tls=False, auth=CREDS)
+            check("[ng] /AccountService/Roles/Administrator → Id == 'Administrator'",
+                  d.get("Id") == "Administrator", True)
+            time.sleep(1)
+
+            # ── Registries / JsonSchemas ──────────────────────────────────────
+            d = http_get(f"{ng}/redfish/v1/Registries", tls=False, auth=CREDS)
+            check("[ng] /Registries → @odata.type present",
+                  d.get("@odata.type") is not None, True)
+            time.sleep(1)
+
+            d = http_get(f"{ng}/redfish/v1/JsonSchemas", tls=False, auth=CREDS)
+            check("[ng] /JsonSchemas → @odata.type present",
+                  d.get("@odata.type") is not None, True)
+            time.sleep(1)
+
+            # ── EventService ──────────────────────────────────────────────────
+            d = http_get(f"{ng}/redfish/v1/EventService", tls=False, auth=CREDS)
+            check("[ng] /EventService → @odata.type present",
+                  d.get("@odata.type") is not None, True)
+            time.sleep(1)
+
+            d = http_get(f"{ng}/redfish/v1/EventService/Subscriptions", tls=False, auth=CREDS)
+            check("[ng] /EventService/Subscriptions → @odata.type present",
+                  d.get("@odata.type") is not None, True)
+            time.sleep(1)
+
+            # ── TaskService ───────────────────────────────────────────────────
+            d = http_get(f"{ng}/redfish/v1/TaskService", tls=False, auth=CREDS)
+            check("[ng] /TaskService → @odata.type present",
+                  d.get("@odata.type") is not None, True)
+            time.sleep(1)
+
+            d = http_get(f"{ng}/redfish/v1/TaskService/Tasks", tls=False, auth=CREDS)
+            check("[ng] /TaskService/Tasks → @odata.type present",
+                  d.get("@odata.type") is not None, True)
+            time.sleep(1)
+
+            # ── UpdateService ─────────────────────────────────────────────────
+            d = http_get(f"{ng}/redfish/v1/UpdateService", tls=False, auth=CREDS)
+            check("[ng] /UpdateService → @odata.type present",
+                  d.get("@odata.type") is not None, True)
+            time.sleep(1)
+
+            d = http_get(f"{ng}/redfish/v1/UpdateService/FirmwareInventory", tls=False, auth=CREDS)
+            check("[ng] /UpdateService/FirmwareInventory → @odata.type present",
+                  d.get("@odata.type") is not None, True)
+            time.sleep(1)
+
+            # ── CertificateService ────────────────────────────────────────────
+            d = http_get(f"{ng}/redfish/v1/CertificateService", tls=False, auth=CREDS)
+            check("[ng] /CertificateService → @odata.type present",
+                  d.get("@odata.type") is not None, True)
+            time.sleep(1)
+
+            # ── TelemetryService ──────────────────────────────────────────────
+            d = http_get(f"{ng}/redfish/v1/TelemetryService", tls=False, auth=CREDS)
+            check("[ng] /TelemetryService → @odata.type present",
+                  d.get("@odata.type") is not None, True)
+            time.sleep(1)
+
+            # ── Health endpoint (non-Redfish) ─────────────────────────────────
+            c = http_code(f"{ng}/health", tls=False)
+            check("[ng] /health → HTTP 200", c == "200", True)
+            time.sleep(1)
+
+            # ── Negative: require auth on protected endpoint ───────────────────
+            c = http_code(f"{ng}/redfish/v1/Systems", tls=False)
+            check("[ng] /Systems without auth → HTTP 401",
+                  c == "401", True)
 
 # ── 8. Kill QEMU ──────────────────────────────────────────────────────────────
+# When SKIP_TEARDOWN=1 (set by _run_validator.sh) keep QEMU alive so the
+# validator can run against bmcweb-ng, then wait until killed externally.
+# In this mode the Summary section is also skipped so sys.exit() is not called.
+if os.environ.get("SKIP_TEARDOWN") == "1":
+    log(f"\nSKIP_TEARDOWN=1: QEMU + bmcweb-ng left running.")
+    log(f"  bmcweb-ng : http://{HOST}:{NG_PORT}/redfish/v1")
+    log(f"  upstream  : https://{HOST}:{HTTPS}/redfish/v1")
+    log("  Waiting for parent process to kill QEMU (send SIGTERM to this process).")
+    try:
+        proc.wait()
+    except KeyboardInterrupt:
+        proc.terminate()
+    sys.exit(0)   # skip summary + sys.exit(1) below
+
 proc.terminate()
 log("\nQEMU stopped")
 

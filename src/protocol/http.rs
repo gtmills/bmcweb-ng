@@ -91,7 +91,9 @@ impl HttpServer {
         //   2. Overlaying the session creation routes with optional auth so the
         //      login endpoint accepts unauthenticated requests.
         let session_login_router = Router::new()
-            // GET /redfish/v1 (service root) is unauthenticated per Redfish spec §7.3.1
+            // GET /redfish/v1 (service root) is unauthenticated per Redfish spec §7.3.1.
+            // Both the plain form and the trailing-slash form are registered here;
+            // the DMTF Redfish Service Validator requests the trailing-slash form.
             .route(
                 "/",
                 axum::routing::get(crate::api::redfish::service_root::get_service_root),
@@ -153,6 +155,11 @@ impl HttpServer {
         Router::new()
             .route("/", get(root_handler))
             .route("/health", get(health_handler))
+            // Trailing-slash alias for service root — DMTF validator uses this form.
+            .route(
+                "/redfish/v1/",
+                axum::routing::get(crate::api::redfish::service_root::get_service_root),
+            )
             .nest("/redfish/v1", redfish_router)
             .merge(ws_router)
             .merge(dbus_rest_router)

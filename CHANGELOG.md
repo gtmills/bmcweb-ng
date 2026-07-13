@@ -7,7 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **axum 0.7 catch-all routing** (`src/api/dbus_rest.rs`) — DBus REST routes
+  `/xyz/{*path}` and `/org/{*path}` used axum 0.8 wildcard syntax, causing
+  a startup panic: `"Invalid route: catch-all parameters are only allowed at
+  the end of a route"`. Corrected to `*path` (axum 0.7 syntax).
+
+- **ServiceRoot unauthenticated access** (`src/api/redfish/mod.rs`,
+  `src/protocol/http.rs`) — `GET /redfish/v1` was behind the mandatory auth
+  middleware, requiring credentials and violating Redfish spec §7.3.1.
+  Moved to the open (optional-auth) router. Added `/redfish/v1/` trailing-slash
+  alias for compatibility with the DMTF Redfish Service Validator.
+
+### Added
+
+- **DMTF Redfish Service Validator integration** (`scripts/_run_validator.sh`)
+  — New script that boots rainier-bmc QEMU, injects bmcweb-ng, and runs the
+  DMTF `RedfishServiceValidator.py` against the live service. Accepts
+  `REDFISH_VALIDATOR`, `BMCWEB_USER`, `BMCWEB_PASS`, and `VALIDATOR_LOG_DIR`
+  environment overrides. Logs to `/tmp/redfish_validator_logs/` by default.
+
+- **Expanded e2e test suite** (`scripts/_e2e_test.py`) — Grew from 11 to 69
+  tests across all major Redfish endpoints. Now covers: ServiceRoot (7 checks
+  including unauthenticated access and link verification), Systems collection +
+  instance + all sub-resources (Processors, Memory, Storage, EthernetInterfaces,
+  LogServices, EventLog/Entries), Chassis collection + instance + Power/Thermal/
+  Sensors, Managers collection + instance + NetworkProtocol/EthernetInterfaces/
+  LogServices, SessionService + Sessions (including POST login), AccountService +
+  Accounts + Roles + individual role, Registries, JsonSchemas, EventService +
+  Subscriptions, TaskService + Tasks, UpdateService + FirmwareInventory,
+  CertificateService, TelemetryService, `/health` endpoint, and a negative test
+  confirming 401 on unauthenticated requests to protected endpoints.
+
+- **Path auto-detection** (`scripts/_e2e_test.py`) — `IMGDIR` and `BMCWEB_NG`
+  are now derived from the script's own path via `__file__`, eliminating all
+  hardcoded user-specific paths. Startup checks fail fast with a clear error
+  if the image dir or binary is missing.
+
+- **`SKIP_TEARDOWN=1` mode** (`scripts/_e2e_test.py`) — When set, the script
+  keeps QEMU running after tests complete (without printing a summary or calling
+  `sys.exit`), allowing external tooling (e.g. the DMTF validator) to run
+  against the live service.
+
+### Changed
+
+- **QEMU_SETUP.md** — Added full p10bmc / IBM Rainier section covering image
+  layout differences, prerequisites (QEMU ≥ 7.1, rainier-bmc machine type),
+  exact QEMU command line, port forwarding table, binary injection steps,
+  debugging commands, and known limitations.
+
+- **`.cargo/config.toml`** — Clarified that `arm-unknown-linux-gnueabihf`
+  cross-compiles for both generic `qemuarm` and IBM Rainier (AST2600).
+
+- **`DEVELOPMENT_STATUS.md`** — Updated "Not Yet Implemented" section to
+  reflect completed features: DBus REST API, KVM WebSocket, Virtual Media,
+  mTLS, Registries/JsonSchemas are all implemented. Only LDAP integration
+  and complete Virtual Media data-path remain open.
+
 ---
+
 
 ## [0.3.0] - 2026-07-11
 
