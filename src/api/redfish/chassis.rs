@@ -755,3 +755,85 @@ mod tests {
         assert_eq!(result.unwrap_err(), StatusCode::NOT_FOUND);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Assembly
+// ---------------------------------------------------------------------------
+
+/// GET /redfish/v1/Chassis/{chassis_id}/Assembly
+///
+/// Returns the Assembly resource for a chassis.
+/// On OpenBMC, assembly/FRU data lives at xyz.openbmc_project.Inventory.Decorator.Asset
+/// on the chassis inventory object.
+pub async fn get_chassis_assembly(
+    State(state): State<Arc<AppState>>,
+    Path(chassis_id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    use crate::dbus::{DbusClient, ZBusClient};
+
+    // Validate chassis id
+    let chassis_path = format!("/xyz/openbmc_project/inventory/system/chassis/{}", chassis_id);
+
+    let assemblies: Vec<Value> = if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        // Each sub-component under the chassis path that has Inventory.Item is an assembly member
+        match client
+            .get_managed_objects(
+                "xyz.openbmc_project.Inventory.Manager",
+                "/xyz/openbmc_project/inventory",
+            )
+            .await
+        {
+            Ok(objects) => {
+                let asset_iface = "xyz.openbmc_project.Inventory.Decorator.Asset";
+                let item_iface  = "xyz.openbmc_project.Inventory.Item";
+                let mut idx = 0u32;
+                objects
+                    .iter()
+                    .filter(|(path, ifaces)| {
+                        path.starts_with(&chassis_path)
+                            && ifaces.contains_key(item_iface)
+                    })
+                    .map(|(path, ifaces)| {
+                        let name = path.rsplit('/').next().unwrap_or("unknown").to_string();
+                        let asset = ifaces.get(asset_iface);
+                        let serial = asset
+                            .and_then(|a| a.get("SerialNumber"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("").to_string();
+                        let part_number = asset
+                            .and_then(|a| a.get("PartNumber"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("").to_string();
+                        let model = asset
+                            .and_then(|a| a.get("Model"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("").to_string();
+                        idx += 1;
+                        json!({
+                            "MemberId": idx.to_string(),
+                            "Name": name,
+                            "SerialNumber": serial,
+                            "PartNumber": part_number,
+                            "Model": model,
+                            "Status": { "State": "Enabled", "Health": "OK" }
+                        })
+                    })
+                    .collect()
+            }
+            Err(_) => vec![],
+        }
+    } else {
+        // No DBus — return empty assembly
+        vec![]
+    };
+
+    Ok(Json(json!({
+        "@odata.type": "#Assembly.v1_5_0.Assembly",
+        "@odata.id": format!("/redfish/v1/Chassis/{}/Assembly", chassis_id),
+        "Id": "Assembly",
+        "Name": "Assembly",
+        "Assemblies": assemblies,
+        "Assemblies@odata.count": assemblies.len()
+    })))
+}

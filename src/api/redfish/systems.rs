@@ -1252,3 +1252,154 @@ mod tests {
         assert!(json["Entries"]["@odata.id"].is_string());
     }
 }
+
+// ---------------------------------------------------------------------------
+// ActionInfo endpoints
+// ---------------------------------------------------------------------------
+
+/// GET /redfish/v1/Systems/{system_id}/Actions/ComputerSystem.Reset/ActionInfo
+///
+/// Describes the allowable values for the ComputerSystem.Reset action.
+/// The validator follows the `@Redfish.ActionInfo` link from the Actions object.
+pub async fn get_reset_action_info(
+    State(_state): State<Arc<AppState>>,
+    Path(system_id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    validate_system_id(&system_id)?;
+    Ok(Json(json!({
+        "@odata.type": "#ActionInfo.v1_4_0.ActionInfo",
+        "@odata.id": format!("/redfish/v1/Systems/{}/Actions/ComputerSystem.Reset/ActionInfo", system_id),
+        "Id": "ResetActionInfo",
+        "Name": "Reset Action Info",
+        "Parameters": [
+            {
+                "Name": "ResetType",
+                "Required": true,
+                "DataType": "String",
+                "AllowableValues": [
+                    "On", "ForceOff", "GracefulShutdown", "GracefulRestart",
+                    "ForceRestart", "Nmi", "ForceOn", "PushPowerButton",
+                    "PowerCycle", "Suspend", "Pause", "Resume"
+                ]
+            }
+        ]
+    })))
+}
+
+/// GET /redfish/v1/Systems/{system_id}/LogServices/EventLog/Actions/LogService.ClearLog/ActionInfo
+pub async fn get_clear_event_log_action_info(
+    State(_state): State<Arc<AppState>>,
+    Path(system_id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    validate_system_id(&system_id)?;
+    Ok(Json(json!({
+        "@odata.type": "#ActionInfo.v1_4_0.ActionInfo",
+        "@odata.id": format!(
+            "/redfish/v1/Systems/{}/LogServices/EventLog/Actions/LogService.ClearLog/ActionInfo",
+            system_id
+        ),
+        "Id": "ClearLogActionInfo",
+        "Name": "Clear Log Action Info",
+        "Parameters": []
+    })))
+}
+
+// ---------------------------------------------------------------------------
+// PCIeDevices
+// ---------------------------------------------------------------------------
+
+/// GET /redfish/v1/Systems/{system_id}/PCIeDevices
+///
+/// Returns the PCIe device collection for this system.
+/// On OpenBMC, PCIe devices are at /xyz/openbmc_project/inventory/system/chassis/…
+/// with interface xyz.openbmc_project.Inventory.Item.PCIeDevice.
+pub async fn get_pcie_devices_collection(
+    State(state): State<Arc<AppState>>,
+    Path(system_id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    validate_system_id(&system_id)?;
+
+    let members: Vec<Value> = if let Some(conn) = state.dbus_connection.as_deref() {
+        use crate::dbus::{DbusClient, ZBusClient};
+        let client = ZBusClient::from_connection(conn.clone());
+        match client
+            .get_managed_objects(
+                "xyz.openbmc_project.Inventory.Manager",
+                "/xyz/openbmc_project/inventory",
+            )
+            .await
+        {
+            Ok(objects) => {
+                let pcie_iface = "xyz.openbmc_project.Inventory.Item.PCIeDevice";
+                objects
+                    .iter()
+                    .filter(|(_, ifaces)| ifaces.contains_key(pcie_iface))
+                    .filter_map(|(path, _)| {
+                        let id = path.rsplit('/').next()?;
+                        Some(json!({
+                            "@odata.id": format!(
+                                "/redfish/v1/Systems/{}/PCIeDevices/{}",
+                                system_id, id
+                            )
+                        }))
+                    })
+                    .collect()
+            }
+            Err(_) => vec![],
+        }
+    } else {
+        vec![]
+    };
+
+    let count = members.len();
+    Ok(Json(json!({
+        "@odata.type": "#PCIeDeviceCollection.PCIeDeviceCollection",
+        "@odata.id": format!("/redfish/v1/Systems/{}/PCIeDevices", system_id),
+        "Name": "PCIe Device Collection",
+        "Members@odata.count": count,
+        "Members": members
+    })))
+}
+
+/// GET /redfish/v1/Systems/{system_id}/PCIeDevices/{pcie_id}
+pub async fn get_pcie_device(
+    State(state): State<Arc<AppState>>,
+    Path((system_id, pcie_id)): Path<(String, String)>,
+) -> Result<Json<Value>, StatusCode> {
+    validate_system_id(&system_id)?;
+
+    if let Some(conn) = state.dbus_connection.as_deref() {
+        use crate::dbus::{DbusClient, ZBusClient};
+        let client = ZBusClient::from_connection(conn.clone());
+        // Search inventory for a PCIeDevice with matching id
+        if let Ok(objects) = client
+            .get_managed_objects(
+                "xyz.openbmc_project.Inventory.Manager",
+                "/xyz/openbmc_project/inventory",
+            )
+            .await
+        {
+            let pcie_iface = "xyz.openbmc_project.Inventory.Item.PCIeDevice";
+            for (path, ifaces) in &objects {
+                let id = path.rsplit('/').next().unwrap_or("");
+                if id == pcie_id && ifaces.contains_key(pcie_iface) {
+                    let props = &ifaces[pcie_iface];
+                    let manufacturer = props.get("Manufacturer")
+                        .and_then(|v| v.as_str()).unwrap_or("Unknown").to_string();
+                    let device_type = props.get("DeviceType")
+                        .and_then(|v| v.as_str()).unwrap_or("SingleFunction").to_string();
+                    return Ok(Json(json!({
+                        "@odata.type": "#PCIeDevice.v1_12_0.PCIeDevice",
+                        "@odata.id": format!("/redfish/v1/Systems/{}/PCIeDevices/{}", system_id, pcie_id),
+                        "Id": pcie_id,
+                        "Name": format!("PCIe Device {}", pcie_id),
+                        "Manufacturer": manufacturer,
+                        "DeviceType": device_type,
+                        "Status": { "State": "Enabled", "Health": "OK" }
+                    })));
+                }
+            }
+        }
+    }
+    Err(StatusCode::NOT_FOUND)
+}

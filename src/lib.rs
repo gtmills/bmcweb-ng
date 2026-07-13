@@ -3,6 +3,7 @@
 //! Core library for the bmcweb-ng BMC webserver.
 
 use std::sync::Arc;
+use tokio::sync::RwLock;
 use zbus::Connection;
 
 pub mod api;
@@ -33,6 +34,8 @@ pub struct AppState {
     pub task_service: Option<Arc<services::TaskService>>,
     /// Update service for firmware updates
     pub update_service: Option<Arc<services::UpdateService>>,
+    /// In-memory Telemetry Triggers (created/deleted via REST)
+    pub telemetry_triggers: Arc<RwLock<Vec<serde_json::Value>>>,
 }
 
 impl AppState {
@@ -75,6 +78,7 @@ impl AppState {
             event_service,
             task_service,
             update_service,
+            telemetry_triggers: Arc::new(RwLock::new(Vec::new())),
         }
     }
 

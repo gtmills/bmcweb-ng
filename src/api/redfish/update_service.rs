@@ -4,6 +4,8 @@
 //! - GET  /redfish/v1/UpdateService
 //! - GET  /redfish/v1/UpdateService/FirmwareInventory
 //! - GET  /redfish/v1/UpdateService/FirmwareInventory/{firmware_id}
+//! - GET  /redfish/v1/UpdateService/SoftwareInventory
+//! - GET  /redfish/v1/UpdateService/SoftwareInventory/{software_id}
 //! - POST /redfish/v1/UpdateService/Actions/UpdateService.SimpleUpdate
 //!
 //! Reference: DMTF DSP0266, UpdateService schema v1.14.0,
@@ -384,6 +386,66 @@ pub async fn simple_update(
         )],
         Json(response_body),
     ))
+}
+
+/// GET /redfish/v1/UpdateService/SoftwareInventory
+///
+/// SoftwareInventory mirrors FirmwareInventory but covers host-side software
+/// (BIOS, ME, etc.) in addition to BMC.  On p10bmc the same DBus software
+/// objects are used; items with Purpose `.Host` or `.System` are shown here.
+pub async fn get_software_inventory_collection(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!("GET /redfish/v1/UpdateService/SoftwareInventory");
+
+    let members: Vec<Value> = if let Some(conn) = state.dbus_connection.as_deref() {
+        let items = dbus_firmware_members(conn).await;
+        items
+            .into_iter()
+            .map(|item| {
+                // Rewrite the @odata.id path from FirmwareInventory to SoftwareInventory
+                let id = item["Id"].as_str().unwrap_or("").to_string();
+                json!({
+                    "@odata.id": format!("/redfish/v1/UpdateService/SoftwareInventory/{}", id)
+                })
+            })
+            .collect()
+    } else {
+        vec![]
+    };
+
+    let count = members.len();
+    Ok(Json(json!({
+        "@odata.type": "#SoftwareInventoryCollection.SoftwareInventoryCollection",
+        "@odata.id": "/redfish/v1/UpdateService/SoftwareInventory",
+        "Name": "Software Inventory Collection",
+        "Members@odata.count": count,
+        "Members": members,
+    })))
+}
+
+/// GET /redfish/v1/UpdateService/SoftwareInventory/{software_id}
+pub async fn get_software_inventory(
+    State(state): State<Arc<AppState>>,
+    Path(software_id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!("GET /redfish/v1/UpdateService/SoftwareInventory/{}", software_id);
+
+    // Reuse the DBus firmware enumeration; find the entry by id.
+    if let Some(conn) = state.dbus_connection.as_deref() {
+        let items = dbus_firmware_members(conn).await;
+        if let Some(item) = items.into_iter().find(|i| i["Id"].as_str() == Some(&software_id)) {
+            let mut entry = item.clone();
+            // Repoint @odata.id to SoftwareInventory path
+            entry["@odata.id"] = json!(
+                format!("/redfish/v1/UpdateService/SoftwareInventory/{}", software_id)
+            );
+            entry["@odata.type"] = json!("#SoftwareInventory.v1_10_0.SoftwareInventory");
+            return Ok(Json(entry));
+        }
+    }
+
+    Err(StatusCode::NOT_FOUND)
 }
 
 #[cfg(test)]

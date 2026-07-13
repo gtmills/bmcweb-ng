@@ -801,6 +801,66 @@ pub async fn get_manager_bmc_log_entries(
     })))
 }
 
+/// GET /redfish/v1/Managers/{manager_id}/LogServices/BMC/Entries/{entry_id}
+///
+/// Fetches a single BMC log entry from xyz.openbmc_project.Logging.
+pub async fn get_manager_bmc_log_entry(
+    State(state): State<Arc<AppState>>,
+    Path((manager_id, entry_id)): Path<(String, String)>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!(
+        "GET /redfish/v1/Managers/{}/LogServices/BMC/Entries/{}",
+        manager_id, entry_id
+    );
+    validate_manager_id(&manager_id)?;
+
+    let id_num: u64 = entry_id.parse().map_err(|_| StatusCode::NOT_FOUND)?;
+
+    if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        let dbus_path = format!("/xyz/openbmc_project/logging/entry/{}", id_num);
+        let entry_iface = "xyz.openbmc_project.Logging.Entry";
+
+        match client.get_all_properties(&dbus_path, entry_iface).await {
+            Ok(props) => {
+                let msg = props.get("Message")
+                    .and_then(|v| v.as_str()).unwrap_or("Unknown").to_string();
+                let severity_raw = props.get("Severity")
+                    .and_then(|v| v.as_str()).unwrap_or("");
+                let severity = if severity_raw.ends_with(".Error") || severity_raw.ends_with(".Critical") {
+                    "Critical"
+                } else if severity_raw.ends_with(".Warning") {
+                    "Warning"
+                } else {
+                    "OK"
+                };
+                let ts_ms = props.get("Timestamp").and_then(|v| v.as_u64()).unwrap_or(0);
+                use chrono::{TimeZone, Utc};
+                let created = Utc.timestamp_opt((ts_ms / 1000) as i64, 0)
+                    .single()
+                    .map(|dt| dt.to_rfc3339())
+                    .unwrap_or_else(|| "1970-01-01T00:00:00Z".to_string());
+
+                return Ok(Json(json!({
+                    "@odata.type": "#LogEntry.v1_15_0.LogEntry",
+                    "@odata.id": format!(
+                        "/redfish/v1/Managers/bmc/LogServices/BMC/Entries/{}",
+                        entry_id
+                    ),
+                    "Id": entry_id,
+                    "Name": format!("Log Entry {}", entry_id),
+                    "EntryType": "Event",
+                    "Severity": severity,
+                    "Created": created,
+                    "Message": msg
+                })));
+            }
+            Err(_) => return Err(StatusCode::NOT_FOUND),
+        }
+    }
+    Err(StatusCode::NOT_FOUND)
+}
+
 /// POST /redfish/v1/Managers/{manager_id}/LogServices/BMC/Actions/LogService.ClearLog
 pub async fn clear_manager_bmc_log(
     State(state): State<Arc<AppState>>,

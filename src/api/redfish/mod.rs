@@ -55,6 +55,14 @@ pub fn router() -> Router<Arc<AppState>> {
                get(systems::get_event_log_entry))
         .route("/Systems/:system_id/LogServices/EventLog/Actions/LogService.ClearLog",
                post(systems::clear_event_log))
+        .route("/Systems/:system_id/LogServices/EventLog/Actions/LogService.ClearLog/ActionInfo",
+               get(systems::get_clear_event_log_action_info))
+        .route("/Systems/:system_id/Actions/ComputerSystem.Reset/ActionInfo",
+               get(systems::get_reset_action_info))
+        .route("/Systems/:system_id/PCIeDevices",
+               get(systems::get_pcie_devices_collection))
+        .route("/Systems/:system_id/PCIeDevices/:pcie_id",
+               get(systems::get_pcie_device))
         // Chassis routes
         .route("/Chassis", get(chassis::get_chassis_collection))
         .route("/Chassis/:chassis_id",
@@ -65,6 +73,8 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/Chassis/:chassis_id/Sensors", get(chassis::get_chassis_sensors))
         .route("/Chassis/:chassis_id/NetworkAdapters",
                get(chassis::get_chassis_network_adapters))
+        .route("/Chassis/:chassis_id/Assembly",
+               get(chassis::get_chassis_assembly))
         // Managers routes
         .route("/Managers", get(managers::get_managers_collection))
         .route("/Managers/:manager_id", get(managers::get_manager))
@@ -84,8 +94,14 @@ pub fn router() -> Router<Arc<AppState>> {
                get(managers::get_manager_bmc_log_service))
         .route("/Managers/:manager_id/LogServices/BMC/Entries",
                get(managers::get_manager_bmc_log_entries))
+        .route("/Managers/:manager_id/LogServices/BMC/Entries/:entry_id",
+               get(managers::get_manager_bmc_log_entry))
         .route("/Managers/:manager_id/LogServices/BMC/Actions/LogService.ClearLog",
                post(managers::clear_manager_bmc_log))
+        .route("/Managers/:manager_id/NetworkProtocol/HTTPS/Certificates",
+               get(certificate_service::get_https_certificates_collection))
+        .route("/Managers/:manager_id/NetworkProtocol/HTTPS/Certificates/:cert_id",
+               get(certificate_service::get_https_certificate))
         // SessionService routes.
         // NOTE: POST /SessionService/Sessions (login) is intentionally NOT
         // registered here — it is served from the unauthenticated login router
@@ -142,6 +158,10 @@ pub fn router() -> Router<Arc<AppState>> {
                get(update_service::get_firmware_inventory_collection))
         .route("/UpdateService/FirmwareInventory/:firmware_id",
                get(update_service::get_firmware_inventory))
+        .route("/UpdateService/SoftwareInventory",
+               get(update_service::get_software_inventory_collection))
+        .route("/UpdateService/SoftwareInventory/:software_id",
+               get(update_service::get_software_inventory))
         .route("/UpdateService/Actions/UpdateService.SimpleUpdate",
                post(update_service::simple_update))
         // CertificateService routes
@@ -158,4 +178,11 @@ pub fn router() -> Router<Arc<AppState>> {
                get(telemetry_service::get_metric_report_definitions))
         .route("/TelemetryService/MetricReports",
                get(telemetry_service::get_metric_reports))
+        .route("/TelemetryService/Triggers",
+               get(telemetry_service::get_triggers_collection)
+               .post(telemetry_service::create_trigger))
+        .route("/TelemetryService/Triggers/:trigger_id",
+               get(telemetry_service::get_trigger)
+               .patch(telemetry_service::patch_trigger)
+               .delete(telemetry_service::delete_trigger))
 }

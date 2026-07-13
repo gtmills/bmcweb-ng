@@ -160,6 +160,8 @@ impl HttpServer {
                 "/redfish/v1/",
                 axum::routing::get(crate::api::redfish::service_root::get_service_root),
             )
+            // CSDL metadata document — DMTF validator requests this for schema discovery.
+            .route("/redfish/v1/$metadata", axum::routing::get(metadata_handler))
             .nest("/redfish/v1", redfish_router)
             .merge(ws_router)
             .merge(dbus_rest_router)
@@ -530,6 +532,81 @@ fn generate_self_signed_tls_config() -> Result<ServerConfig> {
 /// Root handler — redirects browsers to the Redfish service root.
 async fn root_handler() -> &'static str {
     "bmcweb-ng BMC webserver — Redfish API available at /redfish/v1"
+}
+
+/// GET /redfish/v1/$metadata
+///
+/// Returns an OData/CSDL metadata document (XML).
+/// The DMTF Redfish Service Validator requests this to resolve schema references.
+/// We return a minimal document that declares all the EntityTypes the validator
+/// needs without bundling the full 20 MB DMTF CSDL corpus.
+async fn metadata_handler() -> impl IntoResponse {
+    use axum::http::{header, HeaderValue};
+
+    // Minimal CSDL document listing the namespaces served by this implementation.
+    // The validator uses the $metadata response to discover schema URIs; it then
+    // fetches individual schemas from the DMTF public repository.
+    let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx" Version="4.0">
+  <edmx:Reference Uri="http://redfish.dmtf.org/schemas/v1/ServiceRoot_v1.xml">
+    <edmx:Include Namespace="ServiceRoot" />
+    <edmx:Include Namespace="ServiceRoot.v1_15_0" />
+  </edmx:Reference>
+  <edmx:Reference Uri="http://redfish.dmtf.org/schemas/v1/ComputerSystem_v1.xml">
+    <edmx:Include Namespace="ComputerSystem" />
+    <edmx:Include Namespace="ComputerSystem.v1_20_0" />
+  </edmx:Reference>
+  <edmx:Reference Uri="http://redfish.dmtf.org/schemas/v1/Chassis_v1.xml">
+    <edmx:Include Namespace="Chassis" />
+    <edmx:Include Namespace="Chassis.v1_24_0" />
+  </edmx:Reference>
+  <edmx:Reference Uri="http://redfish.dmtf.org/schemas/v1/Manager_v1.xml">
+    <edmx:Include Namespace="Manager" />
+    <edmx:Include Namespace="Manager.v1_19_0" />
+  </edmx:Reference>
+  <edmx:Reference Uri="http://redfish.dmtf.org/schemas/v1/SessionService_v1.xml">
+    <edmx:Include Namespace="SessionService" />
+    <edmx:Include Namespace="SessionService.v1_1_9" />
+  </edmx:Reference>
+  <edmx:Reference Uri="http://redfish.dmtf.org/schemas/v1/AccountService_v1.xml">
+    <edmx:Include Namespace="AccountService" />
+    <edmx:Include Namespace="AccountService.v1_12_0" />
+  </edmx:Reference>
+  <edmx:Reference Uri="http://redfish.dmtf.org/schemas/v1/EventService_v1.xml">
+    <edmx:Include Namespace="EventService" />
+    <edmx:Include Namespace="EventService.v1_7_2" />
+  </edmx:Reference>
+  <edmx:Reference Uri="http://redfish.dmtf.org/schemas/v1/TaskService_v1.xml">
+    <edmx:Include Namespace="TaskService" />
+    <edmx:Include Namespace="TaskService.v1_2_0" />
+  </edmx:Reference>
+  <edmx:Reference Uri="http://redfish.dmtf.org/schemas/v1/UpdateService_v1.xml">
+    <edmx:Include Namespace="UpdateService" />
+    <edmx:Include Namespace="UpdateService.v1_14_0" />
+  </edmx:Reference>
+  <edmx:Reference Uri="http://redfish.dmtf.org/schemas/v1/CertificateService_v1.xml">
+    <edmx:Include Namespace="CertificateService" />
+    <edmx:Include Namespace="CertificateService.v1_0_4" />
+  </edmx:Reference>
+  <edmx:Reference Uri="http://redfish.dmtf.org/schemas/v1/TelemetryService_v1.xml">
+    <edmx:Include Namespace="TelemetryService" />
+    <edmx:Include Namespace="TelemetryService.v1_3_2" />
+  </edmx:Reference>
+  <edmx:DataServices>
+    <Schema xmlns="http://docs.oasis-open.org/odata/ns/edm" Namespace="Service">
+      <EntityContainer Name="Service" Extends="ServiceRoot.v1_15_0.ServiceContainer" />
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>"#;
+
+    (
+        axum::http::StatusCode::OK,
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/xml;charset=UTF-8"),
+        )],
+        xml,
+    )
 }
 
 /// GET /health
