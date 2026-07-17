@@ -2156,6 +2156,402 @@ pub async fn get_hypervisor_system(
 /// collection; clients that query `/Systems/hypervisor` directly get the
 /// full resource via `get_hypervisor_system`.
 
+// ---------------------------------------------------------------------------
+// StorageController instance (TODO 5)
+// ---------------------------------------------------------------------------
+
+/// GET /redfish/v1/Systems/{system_id}/Storage/{storage_id}/Controllers/{controller_id}
+///
+/// Returns a single StorageController resource.
+///
+/// Reference: DMTF Redfish StorageController schema v1.6.0
+/// Upstream: redfish-core/lib/storage_controller.hpp `populateStorageController`
+///
+/// OpenBMC DBus: xyz.openbmc_project.Inventory.Item.StorageController
+pub async fn get_storage_controller(
+    State(state): State<Arc<AppState>>,
+    Path((system_id, storage_id, controller_id)): Path<(String, String, String)>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!(
+        "GET /redfish/v1/Systems/{}/Storage/{}/Controllers/{}",
+        system_id, storage_id, controller_id
+    );
+    validate_system_id(&system_id)?;
+
+    let (model, serial, part_number, present) =
+        if let Some(conn) = state.dbus_connection.as_deref() {
+            let client = ZBusClient::from_connection(conn.clone());
+            let asset_iface = "xyz.openbmc_project.Inventory.Decorator.Asset";
+            let item_iface = "xyz.openbmc_project.Inventory.Item";
+
+            // Try to find the controller in DBus inventory
+            let objects = client
+                .get_managed_objects(
+                    "xyz.openbmc_project.Inventory.Manager",
+                    "/xyz/openbmc_project/inventory",
+                )
+                .await
+                .unwrap_or_default();
+
+            let ctrl_iface = "xyz.openbmc_project.Inventory.Item.StorageController";
+            let ctrl_path_opt = objects
+                .iter()
+                .find(|(path, ifaces)| {
+                    ifaces.contains_key(ctrl_iface)
+                        && path.rsplit('/').next() == Some(controller_id.as_str())
+                })
+                .map(|(path, _)| path.clone());
+
+            if let Some(ctrl_path) = ctrl_path_opt {
+                let model = client
+                    .get_property(&ctrl_path, asset_iface, "Model")
+                    .await.ok().and_then(|v| v.as_str().map(|s| s.to_string()))
+                    .unwrap_or_else(|| "Unknown".to_string());
+                let serial = client
+                    .get_property(&ctrl_path, asset_iface, "SerialNumber")
+                    .await.ok().and_then(|v| v.as_str().map(|s| s.to_string()))
+                    .unwrap_or_else(|| "Unknown".to_string());
+                let part = client
+                    .get_property(&ctrl_path, asset_iface, "PartNumber")
+                    .await.ok().and_then(|v| v.as_str().map(|s| s.to_string()))
+                    .unwrap_or_else(|| "Unknown".to_string());
+                let present = client
+                    .get_property(&ctrl_path, item_iface, "Present")
+                    .await.ok().and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+                (model, serial, part, present)
+            } else if controller_id == "0" {
+                // Synthesised controller for storage_id "1"
+                ("Unknown".to_string(), "Unknown".to_string(), "Unknown".to_string(), true)
+            } else {
+                return Err(StatusCode::NOT_FOUND);
+            }
+        } else {
+            if controller_id != "0" {
+                return Err(StatusCode::NOT_FOUND);
+            }
+            ("Unknown".to_string(), "Unknown".to_string(), "Unknown".to_string(), true)
+        };
+
+    let state_str = if present { "Enabled" } else { "Absent" };
+
+    Ok(Json(json!({
+        "@odata.type": "#StorageController.v1_6_0.StorageController",
+        "@odata.id": format!(
+            "/redfish/v1/Systems/{}/Storage/{}/Controllers/{}",
+            system_id, storage_id, controller_id
+        ),
+        "Id": controller_id,
+        "Name": format!("Storage Controller {}", controller_id),
+        "Description": "Storage Controller",
+        "Status": { "State": state_str, "Health": "OK" },
+        "Model": model,
+        "SerialNumber": serial,
+        "PartNumber": part_number,
+        "SupportedControllerProtocols": ["NVMe", "SATA"],
+        "SupportedDeviceProtocols": ["NVMe", "SATA"]
+    })))
+}
+
+// ---------------------------------------------------------------------------
+// Processor OperatingConfigs (TODO 6)
+// ---------------------------------------------------------------------------
+
+/// GET /redfish/v1/Systems/{system_id}/Processors/{processor_id}/OperatingConfigs
+///
+/// Returns the collection of OperatingConfig resources for a processor.
+/// Each entry represents a supported frequency/power operating configuration.
+///
+/// Reference: DMTF Redfish OperatingConfig schema v1.0.3
+/// Upstream: redfish-core/lib/processor_operating_config.hpp
+///
+/// On OpenBMC, operating configs are exposed via
+/// xyz.openbmc_project.Inventory.Item.Cpu.OperatingConfig objects under
+/// the processor inventory path.
+pub async fn get_processor_operating_configs(
+    State(state): State<Arc<AppState>>,
+    Path((system_id, processor_id)): Path<(String, String)>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!(
+        "GET /redfish/v1/Systems/{}/Processors/{}/OperatingConfigs",
+        system_id, processor_id
+    );
+    validate_system_id(&system_id)?;
+
+    let members: Vec<Value> = if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        match client
+            .get_managed_objects(
+                "xyz.openbmc_project.Inventory.Manager",
+                "/xyz/openbmc_project/inventory",
+            )
+            .await
+        {
+            Ok(objects) => {
+                let oc_iface =
+                    "xyz.openbmc_project.Inventory.Item.Cpu.OperatingConfig";
+                let cpu_prefix = format!(
+                    "/xyz/openbmc_project/inventory/system/chassis/motherboard/{}",
+                    processor_id
+                );
+                let mut configs: Vec<String> = objects
+                    .iter()
+                    .filter(|(path, ifaces)| {
+                        ifaces.contains_key(oc_iface) && path.starts_with(&cpu_prefix)
+                    })
+                    .filter_map(|(path, _)| {
+                        path.rsplit('/').next().map(|s| s.to_string())
+                    })
+                    .collect();
+                configs.sort();
+                configs
+                    .iter()
+                    .map(|id| {
+                        json!({
+                            "@odata.id": format!(
+                                "/redfish/v1/Systems/{}/Processors/{}/OperatingConfigs/{}",
+                                system_id, processor_id, id
+                            )
+                        })
+                    })
+                    .collect()
+            }
+            Err(e) => {
+                warn!("Failed to enumerate OperatingConfigs from DBus: {}", e);
+                vec![]
+            }
+        }
+    } else {
+        vec![]
+    };
+
+    Ok(Json(json!({
+        "@odata.type": "#OperatingConfigCollection.OperatingConfigCollection",
+        "@odata.id": format!(
+            "/redfish/v1/Systems/{}/Processors/{}/OperatingConfigs",
+            system_id, processor_id
+        ),
+        "Name": "Operating Config Collection",
+        "Members@odata.count": members.len(),
+        "Members": members
+    })))
+}
+
+/// GET /redfish/v1/Systems/{system_id}/Processors/{processor_id}/OperatingConfigs/{config_id}
+///
+/// Returns a single OperatingConfig resource.
+///
+/// Upstream: redfish-core/lib/processor_operating_config.hpp `getOperatingConfigData`
+pub async fn get_processor_operating_config(
+    State(state): State<Arc<AppState>>,
+    Path((system_id, processor_id, config_id)): Path<(String, String, String)>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!(
+        "GET /redfish/v1/Systems/{}/Processors/{}/OperatingConfigs/{}",
+        system_id, processor_id, config_id
+    );
+    validate_system_id(&system_id)?;
+
+    let (base_speed, max_speed, max_junction_temp, power_limit, available_cores) =
+        if let Some(conn) = state.dbus_connection.as_deref() {
+            let client = ZBusClient::from_connection(conn.clone());
+            let cpu_prefix = format!(
+                "/xyz/openbmc_project/inventory/system/chassis/motherboard/{}",
+                processor_id
+            );
+            let oc_path = format!("{}/{}", cpu_prefix, config_id);
+            let oc_iface = "xyz.openbmc_project.Inventory.Item.Cpu.OperatingConfig";
+
+            let props = client
+                .get_all_properties(&oc_path, oc_iface)
+                .await
+                .map_err(|_| StatusCode::NOT_FOUND)?;
+
+            let base_speed = props.get("BaseSpeed").and_then(|v| v.as_u64()).unwrap_or(0);
+            let max_speed  = props.get("MaxSpeed").and_then(|v| v.as_u64()).unwrap_or(0);
+            let max_jt     = props.get("MaxJunctionTemperature").and_then(|v| v.as_u64()).unwrap_or(0);
+            let power      = props.get("PowerLimit").and_then(|v| v.as_u64()).unwrap_or(0);
+            let cores      = props.get("AvailableCoreCount").and_then(|v| v.as_u64()).unwrap_or(0);
+            (base_speed, max_speed, max_jt, power, cores)
+        } else {
+            return Err(StatusCode::NOT_FOUND);
+        };
+
+    Ok(Json(json!({
+        "@odata.type": "#OperatingConfig.v1_0_3.OperatingConfig",
+        "@odata.id": format!(
+            "/redfish/v1/Systems/{}/Processors/{}/OperatingConfigs/{}",
+            system_id, processor_id, config_id
+        ),
+        "Id": config_id,
+        "Name": format!("Operating Config {}", config_id),
+        "BaseSpeedMHz": base_speed,
+        "MaxSpeedMHz": max_speed,
+        "MaxJunctionTemperatureCelsius": max_junction_temp,
+        "TDPWatts": power_limit,
+        "TurboProfile": [],
+        "BaseSpeedPrioritySettings": [],
+        "AvailableCoreCount": available_cores
+    })))
+}
+
+// ---------------------------------------------------------------------------
+// FabricAdapters (TODO 10)
+// ---------------------------------------------------------------------------
+
+/// GET /redfish/v1/Systems/{system_id}/FabricAdapters
+///
+/// Returns the FabricAdapter collection for this system.
+/// FabricAdapters represent host-side PCIe/CXL fabric adapter inventory.
+///
+/// Reference: DMTF Redfish FabricAdapter schema v1.5.0
+/// Upstream: redfish-core/lib/fabric_adapters.hpp
+///
+/// On OpenBMC, fabric adapters are inventory objects with
+/// xyz.openbmc_project.Inventory.Item.FabricAdapter interface.
+pub async fn get_fabric_adapters(
+    State(state): State<Arc<AppState>>,
+    Path(system_id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!("GET /redfish/v1/Systems/{}/FabricAdapters", system_id);
+    validate_system_id(&system_id)?;
+
+    let members: Vec<Value> = if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        match client
+            .get_managed_objects(
+                "xyz.openbmc_project.Inventory.Manager",
+                "/xyz/openbmc_project/inventory",
+            )
+            .await
+        {
+            Ok(objects) => {
+                let fa_iface = "xyz.openbmc_project.Inventory.Item.FabricAdapter";
+                let mut adapters: Vec<String> = objects
+                    .iter()
+                    .filter(|(_, ifaces)| ifaces.contains_key(fa_iface))
+                    .filter_map(|(path, _)| {
+                        path.rsplit('/').next().map(|s| s.to_string())
+                    })
+                    .collect();
+                adapters.sort();
+
+                adapters
+                    .iter()
+                    .map(|id| {
+                        json!({
+                            "@odata.id": format!(
+                                "/redfish/v1/Systems/{}/FabricAdapters/{}",
+                                system_id, id
+                            )
+                        })
+                    })
+                    .collect()
+            }
+            Err(e) => {
+                warn!("Failed to enumerate FabricAdapters from DBus: {}", e);
+                vec![]
+            }
+        }
+    } else {
+        vec![]
+    };
+
+    Ok(Json(json!({
+        "@odata.type": "#FabricAdapterCollection.FabricAdapterCollection",
+        "@odata.id": format!("/redfish/v1/Systems/{}/FabricAdapters", system_id),
+        "Name": "Fabric Adapter Collection",
+        "Members@odata.count": members.len(),
+        "Members": members
+    })))
+}
+
+/// GET /redfish/v1/Systems/{system_id}/FabricAdapters/{adapter_id}
+///
+/// Returns a single FabricAdapter resource.
+///
+/// Upstream: redfish-core/lib/fabric_adapters.hpp
+pub async fn get_fabric_adapter(
+    State(state): State<Arc<AppState>>,
+    Path((system_id, adapter_id)): Path<(String, String)>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!(
+        "GET /redfish/v1/Systems/{}/FabricAdapters/{}",
+        system_id, adapter_id
+    );
+    validate_system_id(&system_id)?;
+
+    let (manufacturer, model, part_number, location) =
+        if let Some(conn) = state.dbus_connection.as_deref() {
+            let client = ZBusClient::from_connection(conn.clone());
+            // Locate the DBus object for this adapter
+            let objects = client
+                .get_managed_objects(
+                    "xyz.openbmc_project.Inventory.Manager",
+                    "/xyz/openbmc_project/inventory",
+                )
+                .await
+                .unwrap_or_default();
+
+            let fa_iface = "xyz.openbmc_project.Inventory.Item.FabricAdapter";
+            let fa_path_opt = objects
+                .iter()
+                .find(|(path, ifaces)| {
+                    ifaces.contains_key(fa_iface)
+                        && path.rsplit('/').next() == Some(adapter_id.as_str())
+                })
+                .map(|(path, _)| path.clone());
+
+            let Some(fa_path) = fa_path_opt else {
+                return Err(StatusCode::NOT_FOUND);
+            };
+
+            let asset_iface = "xyz.openbmc_project.Inventory.Decorator.Asset";
+            let loc_iface  = "xyz.openbmc_project.Inventory.Decorator.LocationCode";
+
+            let manufacturer = client.get_property(&fa_path, asset_iface, "Manufacturer")
+                .await.ok().and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| "Unknown".to_string());
+            let model = client.get_property(&fa_path, asset_iface, "Model")
+                .await.ok().and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| "Unknown".to_string());
+            let part_number = client.get_property(&fa_path, asset_iface, "PartNumber")
+                .await.ok().and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| "Unknown".to_string());
+            let location = client.get_property(&fa_path, loc_iface, "LocationCode")
+                .await.ok().and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_default();
+
+            (manufacturer, model, part_number, location)
+        } else {
+            return Err(StatusCode::NOT_FOUND);
+        };
+
+    Ok(Json(json!({
+        "@odata.type": "#FabricAdapter.v1_5_0.FabricAdapter",
+        "@odata.id": format!(
+            "/redfish/v1/Systems/{}/FabricAdapters/{}",
+            system_id, adapter_id
+        ),
+        "Id": adapter_id,
+        "Name": adapter_id,
+        "Description": "Fabric Adapter",
+        "Status": { "State": "Enabled", "Health": "OK" },
+        "Manufacturer": manufacturer,
+        "Model": model,
+        "PartNumber": part_number,
+        "Location": {
+            "PartLocation": { "ServiceLabel": location }
+        },
+        "Ports": {
+            "@odata.id": format!(
+                "/redfish/v1/Systems/{}/FabricAdapters/{}/Ports",
+                system_id, adapter_id
+            )
+        }
+    })))
+}
+
 #[cfg(test)]
 mod systems_round3_tests {
     use super::*;

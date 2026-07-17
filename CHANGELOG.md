@@ -9,6 +9,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.4.1] - 2026-07-15
+
+### Added
+
+- **10 new upstream Redfish endpoints (Round 4 upstream sync)**
+
+  - `GET /redfish/v1/odata` — OData service document listing all top-level Redfish
+    collections as JSON; `$metadata` CSDL XML already served from `http.rs`
+    (`redfish-core/lib/odata.hpp`)
+
+  - `GET /Fabrics[/{id}/Switches[/{id}]]` — Fabric collection + Fabric instance +
+    Switches collection + Switch instance; enumerates `Inventory.Item.PCIeSwitch`
+    DBus objects (`redfish-core/lib/fabric.hpp`)
+
+  - `GET /Chassis/{id}/NetworkAdapters/{id}` — NetworkAdapter instance; reads
+    Manufacturer, Model, PartNumber, SerialNumber from `Decorator.Asset` DBus
+    (`redfish-core/lib/network_adapter.hpp`)
+
+  - `GET /Systems/{id}/Storage/{id}/Controllers/{id}` — StorageController instance;
+    reads asset data and `Present` flag; synthesised controller "0" for `Storage/1`
+    (`redfish-core/lib/storage_controller.hpp`)
+
+  - `GET /Systems/{id}/Processors/{id}/OperatingConfigs[/{id}]` — OperatingConfig
+    collection and instance; reads BaseSpeed, MaxSpeed, TDPWatts, MaxJunctionTemp,
+    AvailableCoreCount from `Inventory.Item.Cpu.OperatingConfig` DBus
+    (`redfish-core/lib/processor_operating_config.hpp`)
+
+  - `GET /Managers/{id}/LogServices/DBusEventLog[/Entries]` — Manager DBus event log
+    service backed by `xyz.openbmc_project.Logging`; Manager LogServices count
+    updated 3 → 4 (`redfish-core/lib/manager_logservices_dbus_eventlog.hpp`)
+
+  - `GET /Chassis/{id}/Drives[/{id}]` — Drive collection and instance; maps
+    `DriveType` (HDD/SSD) and `Protocol` (NVMe/SATA/SAS) from DBus enum strings
+    (`redfish-core/lib/storage_chassis.hpp`)
+
+  - `GET /Systems/{id}/FabricAdapters[/{id}]` — FabricAdapter collection and instance;
+    reads Manufacturer, Model, PartNumber, LocationCode from DBus
+    (`redfish-core/lib/fabric_adapters.hpp`)
+
+### Fixed
+
+- **IndicatorLED Blinking state** (`chassis.rs`) — `GET /Chassis/{id}` now checks
+  `enclosure_identify_blink` group first (→ `"Blinking"`), then `enclosure_identify`
+  (→ `"Lit"`), falling back to `"Off"`. Previously only checked the physical LED
+  state, never returning `"Blinking"`. Maps to `redfish-core/lib/led.hpp`.
+
+### Tests
+
+- 157 unit tests passing (up from 149 at v0.4.0). Zero failures.
+- New tests for OData document, all Fabric endpoints, NetworkAdapter instance,
+  StorageController, OperatingConfigs, DBusEventLog service + entries.
+
+---
+
 ## [0.4.0] - 2026-07-15
 
 ### Added
@@ -517,7 +571,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Apache 2.0 license
 - Git repository initialization
 
-[Unreleased]: https://github.com/gtmills/bmcweb-ng/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/gtmills/bmcweb-ng/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/gtmills/bmcweb-ng/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/gtmills/bmcweb-ng/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/gtmills/bmcweb-ng/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/gtmills/bmcweb-ng/compare/v0.2.0...v0.2.1

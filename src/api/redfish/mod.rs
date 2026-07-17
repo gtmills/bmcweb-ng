@@ -10,7 +10,9 @@ pub mod aggregation_service;
 pub mod certificate_service;
 pub mod chassis;
 pub mod event_service;
+pub mod fabrics;
 pub mod managers;
+pub mod odata;
 pub mod service_root;
 pub mod sessions;
 pub mod systems;
@@ -25,6 +27,9 @@ pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         // NOTE: GET / (service root) is intentionally NOT here.
         // It is served unauthenticated from the open router in http.rs per Redfish spec §7.3.1.
+        // OData service document (§12.6 of DSP0266)
+        // NOTE: /$metadata is served unauthenticated from the open router in http.rs
+        .route("/odata", get(odata::get_odata))
         // Systems routes
         .route("/Systems", get(systems::get_systems_collection))
         .route("/Systems/:system_id",
@@ -48,6 +53,16 @@ pub fn router() -> Router<Arc<AppState>> {
                get(systems::get_memory))
         .route("/Systems/:system_id/Storage",
                get(systems::get_storage_collection))
+        .route("/Systems/:system_id/Storage/:storage_id/Controllers/:controller_id",
+               get(systems::get_storage_controller))
+        .route("/Systems/:system_id/FabricAdapters",
+               get(systems::get_fabric_adapters))
+        .route("/Systems/:system_id/FabricAdapters/:adapter_id",
+               get(systems::get_fabric_adapter))
+        .route("/Systems/:system_id/Processors/:processor_id/OperatingConfigs",
+               get(systems::get_processor_operating_configs))
+        .route("/Systems/:system_id/Processors/:processor_id/OperatingConfigs/:config_id",
+               get(systems::get_processor_operating_config))
         .route("/Systems/:system_id/EthernetInterfaces",
                get(systems::get_ethernet_interfaces_collection))
         .route("/Systems/:system_id/NetworkInterfaces",
@@ -110,6 +125,12 @@ pub fn router() -> Router<Arc<AppState>> {
                get(chassis::get_chassis_thermal_metrics))
         .route("/Chassis/:chassis_id/PCIeSlots",
                get(chassis::get_chassis_pcie_slots))
+        .route("/Chassis/:chassis_id/NetworkAdapters/:adapter_id",
+               get(chassis::get_chassis_network_adapter))
+        .route("/Chassis/:chassis_id/Drives",
+               get(chassis::get_chassis_drives))
+        .route("/Chassis/:chassis_id/Drives/:drive_id",
+               get(chassis::get_chassis_drive))
         // Cables routes
         .route("/Cables", get(chassis::get_cables_collection))
         .route("/Cables/:cable_id", get(chassis::get_cable))
@@ -140,6 +161,10 @@ pub fn router() -> Router<Arc<AppState>> {
                get(managers::get_manager_journal_log_service))
         .route("/Managers/:manager_id/LogServices/Journal/Entries",
                get(managers::get_manager_journal_entries))
+        .route("/Managers/:manager_id/LogServices/DBusEventLog",
+               get(managers::get_manager_dbus_eventlog_service))
+        .route("/Managers/:manager_id/LogServices/DBusEventLog/Entries",
+               get(managers::get_manager_dbus_eventlog_entries))
         .route("/Managers/:manager_id/ManagerDiagnosticData",
                get(managers::get_manager_diagnostic_data))
         .route("/Managers/:manager_id/NetworkProtocol/HTTPS/Certificates",
@@ -208,6 +233,15 @@ pub fn router() -> Router<Arc<AppState>> {
                get(update_service::get_software_inventory))
         .route("/UpdateService/Actions/UpdateService.SimpleUpdate",
                post(update_service::simple_update))
+        // Fabrics routes
+        .route("/Fabrics",
+               get(fabrics::get_fabrics_collection))
+        .route("/Fabrics/:fabric_id",
+               get(fabrics::get_fabric))
+        .route("/Fabrics/:fabric_id/Switches",
+               get(fabrics::get_fabric_switches))
+        .route("/Fabrics/:fabric_id/Switches/:switch_id",
+               get(fabrics::get_fabric_switch))
         // AggregationService route
         .route("/AggregationService",
                get(aggregation_service::get_aggregation_service))

@@ -186,8 +186,28 @@ pub async fn get_chassis(
                 )
                 .await.ok().and_then(|v| v.as_str().map(|s| s.to_string()))
                 .unwrap_or_default();
-            let led = if led_state_raw.ends_with(".On") {
+            // IndicatorLED: check enclosure_identify_blink first (upstream led.hpp)
+            // then fall back to enclosure_identify solid-on state.
+            let blink_asserted = client
+                .get_property(
+                    "/xyz/openbmc_project/led/groups/enclosure_identify_blink",
+                    "xyz.openbmc_project.Led.Group",
+                    "Asserted",
+                )
+                .await.ok().and_then(|v| v.as_bool()).unwrap_or(false);
+            let solid_asserted = client
+                .get_property(
+                    "/xyz/openbmc_project/led/groups/enclosure_identify",
+                    "xyz.openbmc_project.Led.Group",
+                    "Asserted",
+                )
+                .await.ok().and_then(|v| v.as_bool()).unwrap_or(false);
+            let led = if blink_asserted {
                 "Blinking"
+            } else if solid_asserted {
+                "Lit"
+            } else if led_state_raw.ends_with(".On") {
+                "Lit"
             } else {
                 "Off"
             };
@@ -652,6 +672,264 @@ pub async fn get_chassis_network_adapters(
         "Name": "Network Adapter Collection",
         "Members@odata.count": members.len(),
         "Members": members
+    })))
+}
+
+// ---------------------------------------------------------------------------
+// NetworkAdapter instance (TODO 4)
+// ---------------------------------------------------------------------------
+
+/// GET /redfish/v1/Chassis/{chassis_id}/NetworkAdapters/{adapter_id}
+///
+/// Returns a single NetworkAdapter resource.  Reads asset information
+/// (Manufacturer, Model, PartNumber) from the DBus inventory decorator.
+///
+/// Reference: DMTF Redfish NetworkAdapter schema v1.11.0
+/// Upstream: redfish-core/lib/network_adapter.hpp
+pub async fn get_chassis_network_adapter(
+    State(state): State<Arc<AppState>>,
+    Path((chassis_id, adapter_id)): Path<(String, String)>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!(
+        "GET /redfish/v1/Chassis/{}/NetworkAdapters/{}",
+        chassis_id, adapter_id
+    );
+    validate_chassis_id(&chassis_id)?;
+
+    let (manufacturer, model, part_number, serial_number) =
+        if let Some(conn) = state.dbus_connection.as_deref() {
+            let client = ZBusClient::from_connection(conn.clone());
+            // DBus path convention: .../inventory/system/<chassis_id>/<adapter_id>
+            let inv_path = format!(
+                "/xyz/openbmc_project/inventory/system/{}/{}",
+                chassis_id, adapter_id
+            );
+            let asset_iface = "xyz.openbmc_project.Inventory.Decorator.Asset";
+
+            let manufacturer = client
+                .get_property(&inv_path, asset_iface, "Manufacturer")
+                .await.ok().and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| "Unknown".to_string());
+            let model = client
+                .get_property(&inv_path, asset_iface, "Model")
+                .await.ok().and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| "Unknown".to_string());
+            let part_number = client
+                .get_property(&inv_path, asset_iface, "PartNumber")
+                .await.ok().and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| "Unknown".to_string());
+            let serial_number = client
+                .get_property(&inv_path, asset_iface, "SerialNumber")
+                .await.ok().and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| "Unknown".to_string());
+
+            (manufacturer, model, part_number, serial_number)
+        } else {
+            (
+                "Unknown".to_string(),
+                "Unknown".to_string(),
+                "Unknown".to_string(),
+                "Unknown".to_string(),
+            )
+        };
+
+    Ok(Json(json!({
+        "@odata.type": "#NetworkAdapter.v1_11_0.NetworkAdapter",
+        "@odata.id": format!(
+            "/redfish/v1/Chassis/{}/NetworkAdapters/{}",
+            chassis_id, adapter_id
+        ),
+        "Id": adapter_id,
+        "Name": adapter_id,
+        "Description": "Network Adapter",
+        "Status": { "State": "Enabled", "Health": "OK" },
+        "Manufacturer": manufacturer,
+        "Model": model,
+        "PartNumber": part_number,
+        "SerialNumber": serial_number,
+        "NetworkPorts": {
+            "@odata.id": format!(
+                "/redfish/v1/Chassis/{}/NetworkAdapters/{}/NetworkPorts",
+                chassis_id, adapter_id
+            )
+        },
+        "NetworkDeviceFunctions": {
+            "@odata.id": format!(
+                "/redfish/v1/Chassis/{}/NetworkAdapters/{}/NetworkDeviceFunctions",
+                chassis_id, adapter_id
+            )
+        }
+    })))
+}
+
+// ---------------------------------------------------------------------------
+// Chassis Drives (TODO 8)
+// ---------------------------------------------------------------------------
+
+/// GET /redfish/v1/Chassis/{chassis_id}/Drives
+///
+/// Returns the collection of drives associated with this chassis.
+///
+/// Reference: DMTF Redfish DriveCollection schema
+/// Upstream: redfish-core/lib/storage_chassis.hpp
+///
+/// On OpenBMC, drives are inventory objects under the chassis path with
+/// interface xyz.openbmc_project.Inventory.Item.Drive.
+pub async fn get_chassis_drives(
+    State(state): State<Arc<AppState>>,
+    Path(chassis_id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!("GET /redfish/v1/Chassis/{}/Drives", chassis_id);
+    validate_chassis_id(&chassis_id)?;
+
+    let members: Vec<Value> = if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        match client
+            .get_managed_objects(
+                "xyz.openbmc_project.Inventory.Manager",
+                "/xyz/openbmc_project/inventory",
+            )
+            .await
+        {
+            Ok(objects) => {
+                let drive_iface = "xyz.openbmc_project.Inventory.Item.Drive";
+                let chassis_prefix = format!(
+                    "/xyz/openbmc_project/inventory/system/{}",
+                    chassis_id
+                );
+                let mut drives: Vec<String> = objects
+                    .iter()
+                    .filter(|(path, ifaces)| {
+                        ifaces.contains_key(drive_iface)
+                            && path.starts_with(&chassis_prefix)
+                    })
+                    .filter_map(|(path, _)| {
+                        path.rsplit('/').next().map(|s| s.to_string())
+                    })
+                    .collect();
+                drives.sort();
+
+                drives
+                    .iter()
+                    .map(|id| {
+                        json!({
+                            "@odata.id": format!(
+                                "/redfish/v1/Chassis/{}/Drives/{}",
+                                chassis_id, id
+                            )
+                        })
+                    })
+                    .collect()
+            }
+            Err(e) => {
+                warn!("Failed to enumerate Drives from DBus: {}", e);
+                vec![]
+            }
+        }
+    } else {
+        vec![]
+    };
+
+    Ok(Json(json!({
+        "@odata.type": "#DriveCollection.DriveCollection",
+        "@odata.id": format!("/redfish/v1/Chassis/{}/Drives", chassis_id),
+        "Name": "Drive Collection",
+        "Members@odata.count": members.len(),
+        "Members": members
+    })))
+}
+
+/// GET /redfish/v1/Chassis/{chassis_id}/Drives/{drive_id}
+///
+/// Returns a single Drive resource from chassis inventory.
+///
+/// Reference: DMTF Redfish Drive schema v1.18.0
+/// Upstream: redfish-core/lib/storage_chassis.hpp
+pub async fn get_chassis_drive(
+    State(state): State<Arc<AppState>>,
+    Path((chassis_id, drive_id)): Path<(String, String)>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!("GET /redfish/v1/Chassis/{}/Drives/{}", chassis_id, drive_id);
+    validate_chassis_id(&chassis_id)?;
+
+    let (model, serial, part_number, capacity_bytes, media_type, protocol) =
+        if let Some(conn) = state.dbus_connection.as_deref() {
+            let client = ZBusClient::from_connection(conn.clone());
+            let inv_path = format!(
+                "/xyz/openbmc_project/inventory/system/{}/{}",
+                chassis_id, drive_id
+            );
+            let asset_iface = "xyz.openbmc_project.Inventory.Decorator.Asset";
+            let drive_iface = "xyz.openbmc_project.Inventory.Item.Drive";
+
+            // Verify the drive exists in DBus
+            let exists = client
+                .get_all_properties(&inv_path, drive_iface)
+                .await
+                .is_ok();
+            if !exists {
+                return Err(StatusCode::NOT_FOUND);
+            }
+
+            let model = client.get_property(&inv_path, asset_iface, "Model")
+                .await.ok().and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| "Unknown".to_string());
+            let serial = client.get_property(&inv_path, asset_iface, "SerialNumber")
+                .await.ok().and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| "Unknown".to_string());
+            let part_number = client.get_property(&inv_path, asset_iface, "PartNumber")
+                .await.ok().and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| "Unknown".to_string());
+
+            let props = client.get_all_properties(&inv_path, drive_iface).await
+                .unwrap_or_default();
+            let capacity = props.get("Capacity")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let drive_type_raw = props.get("DriveType")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_default();
+            let protocol_raw = props.get("Protocol")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_default();
+
+            // Map DriveType to Redfish MediaType
+            let media = if drive_type_raw.ends_with(".SSD") {
+                "SSD"
+            } else if drive_type_raw.ends_with(".HDD") {
+                "HDD"
+            } else {
+                "SSD"
+            };
+            // Map Protocol
+            let proto = if protocol_raw.ends_with(".NVMe") {
+                "NVMe"
+            } else if protocol_raw.ends_with(".SATA") {
+                "SATA"
+            } else if protocol_raw.ends_with(".SAS") {
+                "SAS"
+            } else {
+                "NVMe"
+            };
+
+            (model, serial, part_number, capacity, media.to_string(), proto.to_string())
+        } else {
+            return Err(StatusCode::NOT_FOUND);
+        };
+
+    Ok(Json(json!({
+        "@odata.type": "#Drive.v1_18_0.Drive",
+        "@odata.id": format!("/redfish/v1/Chassis/{}/Drives/{}", chassis_id, drive_id),
+        "Id": drive_id,
+        "Name": drive_id,
+        "Description": "Drive",
+        "Status": { "State": "Enabled", "Health": "OK" },
+        "Model": model,
+        "SerialNumber": serial,
+        "PartNumber": part_number,
+        "CapacityBytes": capacity_bytes,
+        "MediaType": media_type,
+        "Protocol": protocol
     })))
 }
 

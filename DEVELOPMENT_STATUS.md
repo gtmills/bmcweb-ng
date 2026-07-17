@@ -3,7 +3,7 @@
 ## Overview
 This document tracks the development progress of bmcweb-ng, a Rust rewrite of the OpenBMC bmcweb server.
 
-**Last Updated:** 2026-07-15 — v0.4.0
+**Last Updated:** 2026-07-15 — v0.4.1
 
 ## Project Structure
 
@@ -23,12 +23,14 @@ bmcweb-ng/
 │   │   ├── redfish/
 │   │   │   ├── mod.rs           ✅ Redfish router (full route table)
 │   │   │   ├── service_root.rs  ✅ ServiceRoot (v1.17.0 / v1.15.0 type)
-│   │   │   ├── systems.rs       ✅ Systems + Bios + Processors/EnvironmentMetrics + Memory + Storage/{id} + LogServices (EventLog/PostCodes/HostLogger) + Hypervisor
-│   │   │   ├── chassis.rs       ✅ Chassis + Power/PowerSubsystem/PowerSupplies/{id} + Thermal/ThermalSubsystem/Fans/ThermalMetrics + PCIeSlots + Sensors/NetworkAdapters + Cables
-│   │   │   ├── managers.rs      ✅ Managers + NetworkProtocol (IPMI DBus) + EthernetInterfaces + LogServices (BMC/Journal) + ManagerDiagnosticData
+│   │   │   ├── systems.rs       ✅ Systems + Bios + Processors/EnvironmentMetrics/OperatingConfigs + Memory + Storage/{id}/Controllers/{id} + FabricAdapters + LogServices + Hypervisor
+│   │   │   ├── chassis.rs       ✅ Chassis + Power/PowerSubsystem/PowerSupplies + Thermal/ThermalSubsystem/Fans/ThermalMetrics + PCIeSlots + Drives + NetworkAdapters/{id} + Cables
+│   │   │   ├── managers.rs      ✅ Managers + NetworkProtocol (IPMI DBus) + EthernetInterfaces + LogServices (BMC/Journal/DBusEventLog) + ManagerDiagnosticData
 │   │   │   ├── sessions.rs      ✅ SessionService + Sessions (full login flow)
 │   │   │   ├── accounts.rs      ✅ AccountService + Accounts (PasswordExpirationDays) + Roles
 │   │   │   ├── aggregation_service.rs ✅ AggregationService stub
+│   │   │   ├── fabrics.rs       ✅ Fabrics + Switches collection + Switch instance
+│   │   │   ├── odata.rs         ✅ OData service document (/odata) + $metadata doc
 │   │   │   ├── event_service.rs      ✅ EventService + Subscriptions + SubmitTestEvent + SSE
 │   │   │   ├── task_service.rs       ✅ TaskService + Tasks
 │   │   │   ├── update_service.rs     ✅ UpdateService + FirmwareInventory + SimpleUpdate
@@ -333,6 +335,14 @@ bmcweb-ng/
 | Redfish Managers/ManagerDiagnosticData | ✅ | ✅ | Memory/uptime from /proc/meminfo and /proc/uptime |
 | Redfish Managers/LogServices/Journal | ✅ | ✅ | Journal entries via journalctl; graceful degradation |
 | Redfish AggregationService | ✅ | ✅ | Stub (ServiceEnabled=false); maps to upstream aggregation_service.hpp |
+| Redfish OData service document | ✅ | ✅ | GET /odata; $metadata in http.rs (unauthenticated) |
+| Redfish Fabrics | ✅ | ✅ | Collection + Fabric instance + Switches[/{id}] from PCIeSwitch DBus |
+| Redfish Systems/FabricAdapters | ✅ | ✅ | Collection + instance from Inventory.Item.FabricAdapter |
+| Redfish Systems/Storage/Controllers | ✅ | ✅ | StorageController instance with asset data + Present state |
+| Redfish Systems/Processors/OperatingConfigs | ✅ | ✅ | Collection + instance; BaseSpeed/MaxSpeed/TDP from DBus |
+| Redfish Chassis/Drives | ✅ | ✅ | Collection + instance (DriveType/Protocol enum mapping) |
+| Redfish Chassis/NetworkAdapters/{id} | ✅ | ✅ | Instance with Manufacturer/Model/PartNumber from DBus |
+| Redfish Managers/LogServices/DBusEventLog | ✅ | ✅ | DBus event log via xyz.openbmc_project.Logging |
 | SessionService | ✅ | ✅ | Full login flow, X-Auth-Token, role fetched from DBus |
 | AccountService | ✅ | ✅ | Full CRUD + PasswordExpirationDays + PATCH lockout policy + PrivilegeMap |
 | EventService | ✅ | ✅ | Subscriptions + SubmitTestEvent + SSE stream + persisted PATCH settings + AtomicI64 timeout |
@@ -368,6 +378,8 @@ Measured on OpenBMC `qemuarm` (emulated Cortex-A15, 256 MB RAM). Binary:
 | Concurrent 20 GETs | — | 20/20 ✅ | ✅ All successful |
 | Redfish routes (v0.4.0) | — | **60+** | ✅ All endpoints return valid JSON |
 | Unit tests (v0.4.0) | — | **149** | ✅ 0 failures |
+| Redfish routes (v0.4.1) | — | **120+** | ✅ All endpoints return valid JSON |
+| Unit tests (v0.4.1) | — | **157** | ✅ 0 failures |
 
 ## Development Roadmap
 
@@ -447,6 +459,18 @@ Measured on OpenBMC `qemuarm` (emulated Cortex-A15, 256 MB RAM). Binary:
 - [x] IPMI ProtocolEnabled from DBus (phosphor-ipmi-net Running property)
 - [x] PasswordExpirationDays PATCH on Accounts endpoint
 - [x] All round-3 routes registered in mod.rs
+
+### Phase 8: Upstream Sync Round 4 (July 2026)
+- [x] OData service document GET /redfish/v1/odata (odata.hpp)
+- [x] Fabrics + Switches collection + instance (fabric.hpp)
+- [x] NetworkAdapter instance GET /Chassis/{id}/NetworkAdapters/{id} (network_adapter.hpp)
+- [x] StorageController instance GET /Systems/{id}/Storage/{id}/Controllers/{id} (storage_controller.hpp)
+- [x] Processor OperatingConfigs GET /Systems/{id}/Processors/{id}/OperatingConfigs[/{id}] (processor_operating_config.hpp)
+- [x] Manager DBusEventLog LogService + Entries (manager_logservices_dbus_eventlog.hpp)
+- [x] Chassis Drives collection + instance GET /Chassis/{id}/Drives[/{id}] (storage_chassis.hpp)
+- [x] IndicatorLED Blinking state via enclosure_identify_blink DBus group (led.hpp)
+- [x] FabricAdapters collection + instance GET /Systems/{id}/FabricAdapters[/{id}] (fabric_adapters.hpp)
+- [x] All round-4 routes registered in mod.rs (120 routes total)
 
 ### Phase 5: Production Readiness
 - [ ] Comprehensive integration testing

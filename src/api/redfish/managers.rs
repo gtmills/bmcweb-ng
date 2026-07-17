@@ -672,11 +672,12 @@ pub async fn get_manager_log_services(
         "@odata.id": "/redfish/v1/Managers/bmc/LogServices",
         "Name": "Log Services Collection",
         "Description": "Collection of LogServices for this Manager",
-        "Members@odata.count": 3,
+        "Members@odata.count": 4,
         "Members": [
             { "@odata.id": "/redfish/v1/Managers/bmc/LogServices/BMC" },
             { "@odata.id": "/redfish/v1/Managers/bmc/LogServices/Dump" },
-            { "@odata.id": "/redfish/v1/Managers/bmc/LogServices/Journal" }
+            { "@odata.id": "/redfish/v1/Managers/bmc/LogServices/Journal" },
+            { "@odata.id": "/redfish/v1/Managers/bmc/LogServices/DBusEventLog" }
         ]
     })))
 }
@@ -1110,6 +1111,128 @@ pub async fn get_manager_journal_entries(
     })))
 }
 
+
+// ---------------------------------------------------------------------------
+// Manager DBusEventLog LogService (TODO 7)
+// ---------------------------------------------------------------------------
+
+/// GET /redfish/v1/Managers/{manager_id}/LogServices/DBusEventLog
+///
+/// The Manager DBus event log service — backed by the same
+/// `xyz.openbmc_project.Logging` service as the system event log but scoped
+/// to manager-level events.
+///
+/// Reference: DMTF Redfish LogService schema v1_4_0
+/// Upstream: redfish-core/lib/manager_logservices_dbus_eventlog.hpp
+pub async fn get_manager_dbus_eventlog_service(
+    State(_state): State<Arc<AppState>>,
+    Path(manager_id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!(
+        "GET /redfish/v1/Managers/{}/LogServices/DBusEventLog",
+        manager_id
+    );
+    validate_manager_id(&manager_id)?;
+
+    Ok(Json(json!({
+        "@odata.type": "#LogService.v1_4_0.LogService",
+        "@odata.id": format!(
+            "/redfish/v1/Managers/{}/LogServices/DBusEventLog",
+            manager_id
+        ),
+        "Id": "DBusEventLog",
+        "Name": "DBus Event Log Service",
+        "Description": "Manager DBus event log service",
+        "ServiceEnabled": true,
+        "LogEntryType": "Event",
+        "Actions": {
+            "#LogService.ClearLog": {
+                "target": format!(
+                    "/redfish/v1/Managers/{}/LogServices/DBusEventLog/Actions/LogService.ClearLog",
+                    manager_id
+                )
+            }
+        },
+        "Entries": {
+            "@odata.id": format!(
+                "/redfish/v1/Managers/{}/LogServices/DBusEventLog/Entries",
+                manager_id
+            )
+        }
+    })))
+}
+
+/// GET /redfish/v1/Managers/{manager_id}/LogServices/DBusEventLog/Entries
+///
+/// Returns manager-scoped DBus event log entries from
+/// `xyz.openbmc_project.Logging` via GetManagedObjects.
+///
+/// Upstream: redfish-core/lib/manager_logservices_dbus_eventlog.hpp
+pub async fn get_manager_dbus_eventlog_entries(
+    State(state): State<Arc<AppState>>,
+    Path(manager_id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!(
+        "GET /redfish/v1/Managers/{}/LogServices/DBusEventLog/Entries",
+        manager_id
+    );
+    validate_manager_id(&manager_id)?;
+
+    let members: Vec<Value> = if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        match client
+            .get_managed_objects(
+                "xyz.openbmc_project.Logging",
+                "/xyz/openbmc_project/logging",
+            )
+            .await
+        {
+            Ok(objects) => {
+                let entry_iface = "xyz.openbmc_project.Logging.Entry";
+                let mut entries: Vec<(u64, Value)> = objects
+                    .iter()
+                    .filter(|(_, ifaces)| ifaces.contains_key(entry_iface))
+                    .filter_map(|(path, _)| {
+                        let entry_id = path.rsplit('/').next()?.to_string();
+                        let id_num: u64 = entry_id.parse().ok()?;
+                        let entry = json!({
+                            "@odata.type": "#LogEntry.v1_15_0.LogEntry",
+                            "@odata.id": format!(
+                                "/redfish/v1/Managers/{}/LogServices/DBusEventLog/Entries/{}",
+                                manager_id, entry_id
+                            ),
+                            "Id": entry_id,
+                            "Name": format!("Log Entry {}", entry_id),
+                            "EntryType": "Event"
+                        });
+                        Some((id_num, entry))
+                    })
+                    .collect();
+                entries.sort_by_key(|&(id, _)| std::cmp::Reverse(id));
+                entries.into_iter().map(|(_, v)| v).collect()
+            }
+            Err(e) => {
+                warn!("Failed to read DBusEventLog entries: {}", e);
+                vec![]
+            }
+        }
+    } else {
+        vec![]
+    };
+
+    Ok(Json(json!({
+        "@odata.type": "#LogEntryCollection.LogEntryCollection",
+        "@odata.id": format!(
+            "/redfish/v1/Managers/{}/LogServices/DBusEventLog/Entries",
+            manager_id
+        ),
+        "Name": "DBus Event Log Entries",
+        "Members@odata.count": members.len(),
+        "Members": members
+    })))
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1177,7 +1300,28 @@ mod tests {
         let result = get_manager_log_services(State(state), Path("bmc".to_string())).await;
         assert!(result.is_ok());
         let json = result.unwrap().0;
-        assert_eq!(json["Members@odata.count"], 3);
+        assert_eq!(json["Members@odata.count"], 4);
+    }
+
+    #[tokio::test]
+    async fn test_get_manager_dbus_eventlog_service() {
+        let config = Config::default();
+        let state = Arc::new(AppState::new(config));
+        let result = get_manager_dbus_eventlog_service(State(state), Path("bmc".to_string())).await;
+        assert!(result.is_ok());
+        let json = result.unwrap().0;
+        assert_eq!(json["Id"], "DBusEventLog");
+        assert_eq!(json["@odata.type"], "#LogService.v1_4_0.LogService");
+    }
+
+    #[tokio::test]
+    async fn test_get_manager_dbus_eventlog_entries_no_dbus() {
+        let config = Config::default();
+        let state = Arc::new(AppState::new(config));
+        let result = get_manager_dbus_eventlog_entries(State(state), Path("bmc".to_string())).await;
+        assert!(result.is_ok());
+        let json = result.unwrap().0;
+        assert_eq!(json["Members@odata.count"], 0);
     }
 
     #[tokio::test]
