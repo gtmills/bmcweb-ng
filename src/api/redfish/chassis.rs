@@ -1294,3 +1294,314 @@ mod chassis_new_tests {
         assert_eq!(json["Members@odata.count"], 0);
     }
 }
+
+// ---------------------------------------------------------------------------
+// PowerSupply instance (TODO 2)
+// ---------------------------------------------------------------------------
+
+/// GET /redfish/v1/Chassis/{chassis_id}/PowerSubsystem/PowerSupplies/{psu_id}
+///
+/// Returns a single PowerSupply resource.
+///
+/// Reference: DMTF Redfish PowerSupply schema v1_6_0
+/// Upstream: redfish-core/lib/power_supply.hpp
+///
+/// On OpenBMC, power supply objects are at inventory paths with interface
+/// `xyz.openbmc_project.Inventory.Item.PowerSupply`.
+/// Asset and state properties come from Decorator.Asset and Inventory.Item.
+pub async fn get_chassis_power_supply(
+    State(state): State<Arc<AppState>>,
+    Path((chassis_id, psu_id)): Path<(String, String)>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!(
+        "GET /redfish/v1/Chassis/{}/PowerSubsystem/PowerSupplies/{}",
+        chassis_id, psu_id
+    );
+    validate_chassis_id(&chassis_id)?;
+
+    let (manufacturer, model, serial, part_number, present, health) =
+        if let Some(conn) = state.dbus_connection.as_deref() {
+            let client = ZBusClient::from_connection(conn.clone());
+            if let Ok(objects) = client
+                .get_managed_objects(
+                    "xyz.openbmc_project.Inventory.Manager",
+                    "/xyz/openbmc_project/inventory",
+                )
+                .await
+            {
+                let psu_iface = "xyz.openbmc_project.Inventory.Item.PowerSupply";
+                let asset_iface = "xyz.openbmc_project.Inventory.Decorator.Asset";
+                let item_iface = "xyz.openbmc_project.Inventory.Item";
+
+                let found = objects.iter().find(|(path, ifaces)| {
+                    ifaces.contains_key(psu_iface)
+                        && path.rsplit('/').next() == Some(psu_id.as_str())
+                });
+
+                match found {
+                    Some((_, ifaces)) => {
+                        let asset = ifaces.get(asset_iface);
+                        let item = ifaces.get(item_iface);
+
+                        let mfr = asset.and_then(|a| a.get("Manufacturer"))
+                            .and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        let mdl = asset.and_then(|a| a.get("Model"))
+                            .and_then(|v| v.as_str()).unwrap_or("Unknown").to_string();
+                        let sn = asset.and_then(|a| a.get("SerialNumber"))
+                            .and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        let pn = asset.and_then(|a| a.get("PartNumber"))
+                            .and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        let is_present = item.and_then(|i| i.get("Present"))
+                            .and_then(|v| v.as_bool()).unwrap_or(true);
+                        let hlth = if is_present { "OK" } else { "Critical" };
+                        (mfr, mdl, sn, pn, is_present, hlth.to_string())
+                    }
+                    None => return Err(StatusCode::NOT_FOUND),
+                }
+            } else {
+                return Err(StatusCode::NOT_FOUND);
+            }
+        } else {
+            return Err(StatusCode::NOT_FOUND);
+        };
+
+    Ok(Json(json!({
+        "@odata.type": "#PowerSupply.v1_6_0.PowerSupply",
+        "@odata.id": format!(
+            "/redfish/v1/Chassis/{}/PowerSubsystem/PowerSupplies/{}",
+            chassis_id, psu_id
+        ),
+        "Id": psu_id,
+        "Name": psu_id,
+        "Manufacturer": manufacturer,
+        "Model": model,
+        "SerialNumber": serial,
+        "PartNumber": part_number,
+        "Status": {
+            "State": if present { "Enabled" } else { "Absent" },
+            "Health": health
+        }
+    })))
+}
+
+// ---------------------------------------------------------------------------
+// ThermalMetrics (TODO 3)
+// ---------------------------------------------------------------------------
+
+/// GET /redfish/v1/Chassis/{chassis_id}/ThermalSubsystem/ThermalMetrics
+///
+/// Returns real-time thermal sensor readings for this chassis.
+///
+/// Reference: DMTF Redfish ThermalMetrics schema v1_3_2
+/// Upstream: redfish-core/lib/thermal_metrics.hpp
+///
+/// On OpenBMC, temperature sensors are at paths under
+/// `/xyz/openbmc_project/sensors/temperature/` with interface
+/// `xyz.openbmc_project.Sensor.Value`.
+pub async fn get_chassis_thermal_metrics(
+    State(state): State<Arc<AppState>>,
+    Path(chassis_id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!(
+        "GET /redfish/v1/Chassis/{}/ThermalSubsystem/ThermalMetrics",
+        chassis_id
+    );
+    validate_chassis_id(&chassis_id)?;
+
+    let temperature_readings: Vec<Value> = if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        match client
+            .get_managed_objects(
+                "xyz.openbmc_project.Sensor",
+                "/xyz/openbmc_project/sensors",
+            )
+            .await
+        {
+            Ok(objects) => {
+                let sensor_iface = "xyz.openbmc_project.Sensor.Value";
+                let mut readings: Vec<Value> = objects
+                    .iter()
+                    .filter(|(path, ifaces)| {
+                        path.contains("/sensors/temperature/") && ifaces.contains_key(sensor_iface)
+                    })
+                    .filter_map(|(path, ifaces)| {
+                        let props = ifaces.get(sensor_iface)?;
+                        let reading = props.get("Value")?.as_f64()?;
+                        let sensor_name = path.rsplit('/').next().unwrap_or("sensor");
+                        // Build a sensor URI matching the Sensors collection scheme
+                        let sensor_id = format!("temperature_{}", sensor_name);
+                        Some(json!({
+                            "DataSourceUri": format!(
+                                "/redfish/v1/Chassis/{}/Sensors/{}",
+                                chassis_id, sensor_id
+                            ),
+                            "Reading": reading,
+                            "PhysicalContext": "SystemBoard"
+                        }))
+                    })
+                    .collect();
+                readings.sort_by_key(|v| {
+                    v["DataSourceUri"].as_str().unwrap_or("").to_string()
+                });
+                readings
+            }
+            Err(e) => {
+                warn!("Failed to enumerate temperature sensors for ThermalMetrics: {}", e);
+                vec![]
+            }
+        }
+    } else {
+        vec![]
+    };
+
+    Ok(Json(json!({
+        "@odata.type": "#ThermalMetrics.v1_3_2.ThermalMetrics",
+        "@odata.id": format!(
+            "/redfish/v1/Chassis/{}/ThermalSubsystem/ThermalMetrics",
+            chassis_id
+        ),
+        "Id": "ThermalMetrics",
+        "Name": "Chassis Thermal Metrics",
+        "Description": "Real-time thermal sensor readings",
+        "TemperatureReadingsCelsius@odata.count": temperature_readings.len(),
+        "TemperatureReadingsCelsius": temperature_readings,
+        "Status": { "State": "Enabled", "Health": "OK" }
+    })))
+}
+
+// ---------------------------------------------------------------------------
+// PCIeSlots (TODO 5)
+// ---------------------------------------------------------------------------
+
+/// GET /redfish/v1/Chassis/{chassis_id}/PCIeSlots
+///
+/// Returns the PCIeSlots resource for this chassis.
+///
+/// Reference: DMTF Redfish PCIeSlots schema v1_7_0
+/// Upstream: redfish-core/lib/pcie_slots.hpp
+///
+/// On OpenBMC, PCIe slot objects have interface
+/// `xyz.openbmc_project.Inventory.Item.PCIeSlot` in the inventory tree.
+/// Properties include SlotType (e.g. FullLength, HalfLength) and
+/// PCIeType (Gen3, Gen4, Gen5).
+pub async fn get_chassis_pcie_slots(
+    State(state): State<Arc<AppState>>,
+    Path(chassis_id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!("GET /redfish/v1/Chassis/{}/PCIeSlots", chassis_id);
+    validate_chassis_id(&chassis_id)?;
+
+    let slots: Vec<Value> = if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        match client
+            .get_managed_objects(
+                "xyz.openbmc_project.Inventory.Manager",
+                "/xyz/openbmc_project/inventory",
+            )
+            .await
+        {
+            Ok(objects) => {
+                let slot_iface = "xyz.openbmc_project.Inventory.Item.PCIeSlot";
+                let mut slot_list: Vec<Value> = objects
+                    .iter()
+                    .filter(|(_, ifaces)| ifaces.contains_key(slot_iface))
+                    .map(|(path, ifaces)| {
+                        let props = &ifaces[slot_iface];
+                        let slot_id = path.rsplit('/').next().unwrap_or("slot0").to_string();
+
+                        // Map OpenBMC SlotType enum → Redfish SlotType string
+                        let slot_type = props.get("SlotType")
+                            .and_then(|v| v.as_str())
+                            .map(|s| {
+                                if s.ends_with(".FullLength") { "FullLength" }
+                                else if s.ends_with(".HalfLength") { "HalfLength" }
+                                else if s.ends_with(".LowProfile") { "LowProfile" }
+                                else if s.ends_with(".Mini") { "Mini" }
+                                else if s.ends_with(".M2") { "M2" }
+                                else if s.ends_with(".OEM") { "OEM" }
+                                else { "OEM" }
+                            })
+                            .unwrap_or("OEM");
+
+                        // Map OpenBMC PCIeType enum → Redfish PCIeTypes string
+                        let pcie_type = props.get("PCIeType")
+                            .and_then(|v| v.as_str())
+                            .map(|s| {
+                                if s.ends_with(".Gen1") { "Gen1" }
+                                else if s.ends_with(".Gen2") { "Gen2" }
+                                else if s.ends_with(".Gen3") { "Gen3" }
+                                else if s.ends_with(".Gen4") { "Gen4" }
+                                else if s.ends_with(".Gen5") { "Gen5" }
+                                else { "Gen3" }
+                            })
+                            .unwrap_or("Gen3");
+
+                        let lanes = props.get("Lanes")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(16);
+
+                        json!({
+                            "SlotType": slot_type,
+                            "PCIeType": pcie_type,
+                            "Lanes": lanes,
+                            "Status": { "State": "Enabled", "Health": "OK" },
+                            "Location": {
+                                "PartLocation": {
+                                    "ServiceLabel": slot_id
+                                }
+                            }
+                        })
+                    })
+                    .collect();
+                slot_list.sort_by_key(|v| {
+                    v["Location"]["PartLocation"]["ServiceLabel"].as_str().unwrap_or("").to_string()
+                });
+                slot_list
+            }
+            Err(e) => {
+                warn!("Failed to enumerate PCIe slots from DBus: {}", e);
+                vec![]
+            }
+        }
+    } else {
+        vec![]
+    };
+
+    Ok(Json(json!({
+        "@odata.type": "#PCIeSlots.v1_7_0.PCIeSlots",
+        "@odata.id": format!("/redfish/v1/Chassis/{}/PCIeSlots", chassis_id),
+        "Id": "PCIeSlots",
+        "Name": "PCIe Slots",
+        "Description": "PCIe slot inventory for this chassis",
+        "Slots": slots
+    })))
+}
+
+#[cfg(test)]
+mod chassis_round3_tests {
+    use super::*;
+    use crate::config::Config;
+
+    #[tokio::test]
+    async fn test_get_chassis_thermal_metrics_no_dbus() {
+        let config = Config::default();
+        let state = Arc::new(AppState::new(config));
+        let result = get_chassis_thermal_metrics(State(state), Path("chassis".to_string())).await;
+        assert!(result.is_ok());
+        let json = result.unwrap().0;
+        assert_eq!(json["@odata.type"], "#ThermalMetrics.v1_3_2.ThermalMetrics");
+        assert_eq!(json["Id"], "ThermalMetrics");
+        assert_eq!(json["TemperatureReadingsCelsius@odata.count"], 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_chassis_pcie_slots_no_dbus() {
+        let config = Config::default();
+        let state = Arc::new(AppState::new(config));
+        let result = get_chassis_pcie_slots(State(state), Path("chassis".to_string())).await;
+        assert!(result.is_ok());
+        let json = result.unwrap().0;
+        assert_eq!(json["@odata.type"], "#PCIeSlots.v1_7_0.PCIeSlots");
+        assert_eq!(json["Id"], "PCIeSlots");
+    }
+}

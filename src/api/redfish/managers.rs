@@ -9,6 +9,8 @@
 //! - GET  /redfish/v1/Managers/{manager_id}/EthernetInterfaces
 //! - GET  /redfish/v1/Managers/{manager_id}/EthernetInterfaces/{nic_id}
 //! - GET  /redfish/v1/Managers/{manager_id}/LogServices
+//! - GET  /redfish/v1/Managers/{manager_id}/LogServices/Journal
+//! - GET  /redfish/v1/Managers/{manager_id}/LogServices/Journal/Entries
 //!
 //! Reference: DMTF Redfish Manager schema v1.19.0
 //!
@@ -224,8 +226,8 @@ pub async fn get_network_protocol(
     debug!("GET /redfish/v1/Managers/{}/NetworkProtocol", manager_id);
     validate_manager_id(&manager_id)?;
 
-    // Query hostname and NTP server list from DBus
-    let (hostname, ntp_servers) = if let Some(conn) = state.dbus_connection.as_deref() {
+    // Query hostname, NTP server list, and IPMI state from DBus
+    let (hostname, ntp_servers, ipmi_enabled) = if let Some(conn) = state.dbus_connection.as_deref() {
         let client = ZBusClient::from_connection(conn.clone());
 
         let hostname = client
@@ -250,9 +252,22 @@ pub async fn get_network_protocol(
             .and_then(|v| v.as_array().cloned())
             .unwrap_or_default();
 
-        (hostname, ntp_servers)
+        // IPMI over LAN state from phosphor-ipmi-net DBus object
+        // upstream commit 9352bdc8: xyz.openbmc_project.Control.Service.Attributes / Running
+        let ipmi_enabled = client
+            .get_property(
+                "/xyz/openbmc_project/control/service/phosphor_2dipmi_2dnet",
+                "xyz.openbmc_project.Control.Service.Attributes",
+                "Running",
+            )
+            .await
+            .ok()
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+
+        (hostname, ntp_servers, ipmi_enabled)
     } else {
-        ("openbmc".to_string(), vec![])
+        ("openbmc".to_string(), vec![], true)
     };
 
     let fqdn = hostname.clone();
@@ -268,7 +283,7 @@ pub async fn get_network_protocol(
         "HTTP": { "ProtocolEnabled": false, "Port": 80 },
         "HTTPS": { "ProtocolEnabled": true, "Port": 443 },
         "SSH": { "ProtocolEnabled": true, "Port": 22 },
-        "IPMI": { "ProtocolEnabled": true, "Port": 623 },
+        "IPMI": { "ProtocolEnabled": ipmi_enabled, "Port": 623 },
         "NTP": {
             "ProtocolEnabled": true,
             "Port": 123,
@@ -657,10 +672,11 @@ pub async fn get_manager_log_services(
         "@odata.id": "/redfish/v1/Managers/bmc/LogServices",
         "Name": "Log Services Collection",
         "Description": "Collection of LogServices for this Manager",
-        "Members@odata.count": 2,
+        "Members@odata.count": 3,
         "Members": [
             { "@odata.id": "/redfish/v1/Managers/bmc/LogServices/BMC" },
-            { "@odata.id": "/redfish/v1/Managers/bmc/LogServices/Dump" }
+            { "@odata.id": "/redfish/v1/Managers/bmc/LogServices/Dump" },
+            { "@odata.id": "/redfish/v1/Managers/bmc/LogServices/Journal" }
         ]
     })))
 }
@@ -992,6 +1008,108 @@ fn read_proc_meminfo() -> (Option<u64>, Option<u64>, Option<u64>) {
 
 
 
+// ---------------------------------------------------------------------------
+// Journal LogService
+// ---------------------------------------------------------------------------
+
+/// GET /redfish/v1/Managers/{manager_id}/LogServices/Journal
+///
+/// The Journal log service provides access to the BMC systemd journal.
+///
+/// Reference: DMTF Redfish LogService schema v1_4_0
+/// Upstream: redfish-core/lib/manager_logservices_journal.hpp
+///
+/// On OpenBMC the journal is managed by systemd-journald.  The Entries
+/// sub-collection reads from the journal via the `journalctl` binary or
+/// (when not available) returns an empty collection.
+pub async fn get_manager_journal_log_service(
+    State(_state): State<Arc<AppState>>,
+    Path(manager_id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!(
+        "GET /redfish/v1/Managers/{}/LogServices/Journal",
+        manager_id
+    );
+    validate_manager_id(&manager_id)?;
+
+    Ok(Json(json!({
+        "@odata.type": "#LogService.v1_4_0.LogService",
+        "@odata.id": format!("/redfish/v1/Managers/{}/LogServices/Journal", manager_id),
+        "Id": "Journal",
+        "Name": "Journal Log Service",
+        "Description": "BMC systemd journal log service",
+        "ServiceEnabled": true,
+        "LogEntryType": "Event",
+        "Entries": {
+            "@odata.id": format!(
+                "/redfish/v1/Managers/{}/LogServices/Journal/Entries",
+                manager_id
+            )
+        }
+    })))
+}
+
+/// GET /redfish/v1/Managers/{manager_id}/LogServices/Journal/Entries
+///
+/// Returns journal entries.  On a real BMC the journal is read by shelling
+/// out to `journalctl -o short-precise --no-pager -n 200`; in QEMU or when
+/// the binary is not present we return an empty collection.
+///
+/// Upstream: redfish-core/lib/manager_logservices_journal.hpp
+pub async fn get_manager_journal_entries(
+    State(_state): State<Arc<AppState>>,
+    Path(manager_id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!(
+        "GET /redfish/v1/Managers/{}/LogServices/Journal/Entries",
+        manager_id
+    );
+    validate_manager_id(&manager_id)?;
+
+    // Attempt to read from journalctl; gracefully degrade if unavailable
+    let members: Vec<Value> = match tokio::process::Command::new("journalctl")
+        .args(["-o", "short-precise", "--no-pager", "-n", "200"])
+        .output()
+        .await
+    {
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .enumerate()
+                .map(|(i, line)| {
+                    json!({
+                        "@odata.type": "#LogEntry.v1_15_0.LogEntry",
+                        "@odata.id": format!(
+                            "/redfish/v1/Managers/{}/LogServices/Journal/Entries/{}",
+                            manager_id, i
+                        ),
+                        "Id": i.to_string(),
+                        "Name": format!("Journal Entry {}", i),
+                        "EntryType": "Event",
+                        "Severity": "OK",
+                        "Message": line
+                    })
+                })
+                .collect()
+        }
+        _ => {
+            debug!("journalctl not available or failed; returning empty journal entries");
+            vec![]
+        }
+    };
+
+    Ok(Json(json!({
+        "@odata.type": "#LogEntryCollection.LogEntryCollection",
+        "@odata.id": format!(
+            "/redfish/v1/Managers/{}/LogServices/Journal/Entries",
+            manager_id
+        ),
+        "Name": "Journal Log Entries",
+        "Members@odata.count": members.len(),
+        "Members": members
+    })))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1059,6 +1177,27 @@ mod tests {
         let result = get_manager_log_services(State(state), Path("bmc".to_string())).await;
         assert!(result.is_ok());
         let json = result.unwrap().0;
-        assert_eq!(json["Members@odata.count"], 2);
+        assert_eq!(json["Members@odata.count"], 3);
+    }
+
+    #[tokio::test]
+    async fn test_get_manager_journal_log_service() {
+        let config = Config::default();
+        let state = Arc::new(AppState::new(config));
+        let result = get_manager_journal_log_service(State(state), Path("bmc".to_string())).await;
+        assert!(result.is_ok());
+        let json = result.unwrap().0;
+        assert_eq!(json["@odata.type"], "#LogService.v1_4_0.LogService");
+        assert_eq!(json["Id"], "Journal");
+    }
+
+    #[tokio::test]
+    async fn test_get_manager_journal_entries() {
+        let config = Config::default();
+        let state = Arc::new(AppState::new(config));
+        let result = get_manager_journal_entries(State(state), Path("bmc".to_string())).await;
+        assert!(result.is_ok());
+        let json = result.unwrap().0;
+        assert_eq!(json["@odata.type"], "#LogEntryCollection.LogEntryCollection");
     }
 }

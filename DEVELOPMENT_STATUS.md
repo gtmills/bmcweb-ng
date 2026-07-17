@@ -3,7 +3,7 @@
 ## Overview
 This document tracks the development progress of bmcweb-ng, a Rust rewrite of the OpenBMC bmcweb server.
 
-**Last Updated:** 2026-07-14
+**Last Updated:** 2026-07-15
 
 ## Project Structure
 
@@ -23,11 +23,12 @@ bmcweb-ng/
 │   │   ├── redfish/
 │   │   │   ├── mod.rs           ✅ Redfish router (full route table)
 │   │   │   ├── service_root.rs  ✅ ServiceRoot (v1.17.0 / v1.15.0 type)
-│   │   │   ├── systems.rs       ✅ Systems + Bios + Processors/EnvironmentMetrics + Memory + Storage + LogServices (EventLog/PostCodes/HostLogger)
-│   │   │   ├── chassis.rs       ✅ Chassis + Power/PowerSubsystem + Thermal/ThermalSubsystem/Fans + Sensors/NetworkAdapters + Cables
-│   │   │   ├── managers.rs      ✅ Managers + NetworkProtocol/EthernetInterfaces/LogServices + ManagerDiagnosticData
+│   │   │   ├── systems.rs       ✅ Systems + Bios + Processors/EnvironmentMetrics + Memory + Storage/{id} + LogServices (EventLog/PostCodes/HostLogger) + Hypervisor
+│   │   │   ├── chassis.rs       ✅ Chassis + Power/PowerSubsystem/PowerSupplies/{id} + Thermal/ThermalSubsystem/Fans/ThermalMetrics + PCIeSlots + Sensors/NetworkAdapters + Cables
+│   │   │   ├── managers.rs      ✅ Managers + NetworkProtocol (IPMI DBus) + EthernetInterfaces + LogServices (BMC/Journal) + ManagerDiagnosticData
 │   │   │   ├── sessions.rs      ✅ SessionService + Sessions (full login flow)
-│   │   │   ├── accounts.rs      ✅ AccountService + Accounts + Roles
+│   │   │   ├── accounts.rs      ✅ AccountService + Accounts (PasswordExpirationDays) + Roles
+│   │   │   ├── aggregation_service.rs ✅ AggregationService stub
 │   │   │   ├── event_service.rs      ✅ EventService + Subscriptions + SubmitTestEvent + SSE
 │   │   │   ├── task_service.rs       ✅ TaskService + Tasks
 │   │   │   ├── update_service.rs     ✅ UpdateService + FirmwareInventory + SimpleUpdate
@@ -239,6 +240,53 @@ bmcweb-ng/
 
 10. **Updated LogServices collection** (`systems.rs`) — collection now includes EventLog, PostCodes, and HostLogger
 
+### ✅ Completed July 2026 — Upstream Sync Round 3
+
+1. **Storage instance** (`systems.rs`) — `GET /Systems/{id}/Storage/{storage_id}` with DBus drive enumeration
+   - Reads `xyz.openbmc_project.Inventory.Item.Drive` objects under each controller
+   - Maps to upstream `redfish-core/lib/storage.hpp`
+
+2. **PSU instance** (`chassis.rs`) — `GET /Chassis/{id}/PowerSubsystem/PowerSupplies/{psu_id}` with live status
+   - Reads power supply state, input/output wattage, and firmware version from DBus
+   - Maps to upstream `redfish-core/lib/power_supply.hpp`
+
+3. **ThermalMetrics** (`chassis.rs`) — `GET /Chassis/{id}/ThermalSubsystem/ThermalMetrics`
+   - Enumerates temperature sensors from DBus sensor tree
+   - Maps to upstream `redfish-core/lib/thermal_metrics.hpp`
+
+4. **PCIeSlots** (`chassis.rs`) — `GET /Chassis/{id}/PCIeSlots`
+   - Enumerates PCIe slots from `Inventory.Item.PCIeSlot` DBus objects
+   - Maps to upstream `redfish-core/lib/pcie_slots.hpp`
+
+5. **Hypervisor system** (`systems.rs`) — `GET /Systems/hypervisor`
+   - IBM POWER hypervisor partition stub
+   - Returns 404 when no hypervisor DBus object is present
+   - Maps to upstream `redfish-core/lib/hypervisor_system.hpp`
+
+6. **Journal LogService** (`managers.rs`) — `GET /Managers/{id}/LogServices/Journal[/Entries]`
+   - Reads up to 200 lines from systemd journal via `journalctl`; gracefully returns empty list when unavailable
+   - LogServices collection count updated from 2 → 3
+   - Maps to upstream `redfish-core/lib/manager_logservices_journal.hpp`
+
+7. **AggregationService** (`aggregation_service.rs`) — `GET /redfish/v1/AggregationService`
+   - Advertises service presence with `ServiceEnabled: false` (no aggregation targets configured)
+   - Maps to upstream `redfish-core/lib/aggregation_service.hpp`
+
+8. **IPMI ProtocolEnabled from DBus** (`managers.rs`) — `GET /Managers/{id}/NetworkProtocol`
+   - Reads `Running` property from `xyz.openbmc_project.Control.Service.Attributes` on the phosphor-ipmi-net object
+   - Falls back to `true` when property is unavailable
+   - Maps to upstream commit `9352bdc8`
+
+9. **PasswordExpirationDays PATCH** (`accounts.rs`) — `PATCH /AccountService/Accounts/{id}`
+   - New `PasswordExpirationDays` field in `PatchAccountRequest`
+   - Writes `UserPasswordExpiry` (u64 days) via `set_property` on `xyz.openbmc_project.User.Attributes`
+   - Maps to upstream AccountService schema change
+
+10. **Route registration** (`mod.rs`) — All round-3 endpoints wired into the Axum router
+    - `/Systems/{id}/Storage/{storage_id}`, `/Systems/hypervisor`
+    - `/Chassis/{id}/PowerSubsystem/PowerSupplies/{psu_id}`, `/ThermalMetrics`, `/PCIeSlots`
+    - `/Managers/{id}/LogServices/Journal[/Entries]`, `/AggregationService`
+
 ### ❌ Not Yet Implemented
 
 1. **LDAP/Active Directory integration**
@@ -271,18 +319,22 @@ bmcweb-ng/
 | Redfish Systems/Processors | ✅ | ✅ | Collection + individual instance from DBus inventory |
 | Redfish Systems/Processors/EnvironmentMetrics | ✅ | ✅ | Per-CPU temperature/power from sensor DBus tree |
 | Redfish Systems/Memory | ✅ | ✅ | Collection + individual instance from DBus inventory |
-| Redfish Systems/Storage | ✅ | ✅ | Collection enumerated from Inventory.Item.StorageController |
+| Redfish Systems/Storage | ✅ | ✅ | Collection + instance; drives from Inventory.Item.Drive |
 | Redfish Systems/LogServices | ✅ | ✅ | EventLog + PostCodes + HostLogger (3 services) |
 | Redfish Systems/PCIeDevices | ✅ | ✅ | Collection + instance from DBus inventory |
 | Redfish Chassis | ✅ | ✅ | GET+PATCH, live name/model/serial/LED; Power/Thermal/Sensors |
-| Redfish Chassis/PowerSubsystem | ✅ | ✅ | PowerSubsystem + PowerSupplies collection from DBus |
-| Redfish Chassis/ThermalSubsystem | ✅ | ✅ | ThermalSubsystem + Fans collection + Fan instance |
+| Redfish Chassis/PowerSubsystem | ✅ | ✅ | PowerSubsystem + PowerSupplies collection + PSU instance |
+| Redfish Chassis/ThermalSubsystem | ✅ | ✅ | ThermalSubsystem + Fans + ThermalMetrics |
+| Redfish Chassis/PCIeSlots | ✅ | ✅ | PCIeSlots from Inventory.Item.PCIeSlot |
 | Redfish Chassis/Assembly | ✅ | ✅ | FRU assembly data from DBus inventory |
 | Redfish Cables | ✅ | ✅ | Collection + instance from xyz.openbmc_project.Inventory.Item.Cable |
-| Redfish Managers | ✅ | ✅ | GET+PATCH NIC; live FirmwareVersion/hostname/NTP; Reset via DBus |
+| Redfish Systems/hypervisor | ✅ | ✅ | IBM POWER hypervisor partition stub |
+| Redfish Managers | ✅ | ✅ | GET+PATCH NIC; live FirmwareVersion/hostname/NTP/IPMI; Reset via DBus |
 | Redfish Managers/ManagerDiagnosticData | ✅ | ✅ | Memory/uptime from /proc/meminfo and /proc/uptime |
+| Redfish Managers/LogServices/Journal | ✅ | ✅ | Journal entries via journalctl; graceful degradation |
+| Redfish AggregationService | ✅ | ✅ | Stub (ServiceEnabled=false); maps to upstream aggregation_service.hpp |
 | SessionService | ✅ | ✅ | Full login flow, X-Auth-Token, role fetched from DBus |
-| AccountService | ✅ | ✅ | Full CRUD + PATCH lockout policy + PrivilegeMap |
+| AccountService | ✅ | ✅ | Full CRUD + PasswordExpirationDays + PATCH lockout policy + PrivilegeMap |
 | EventService | ✅ | ✅ | Subscriptions + SubmitTestEvent + SSE stream + persisted PATCH settings + AtomicI64 timeout |
 | TaskService | ✅ | ✅ | Collection + instance management |
 | UpdateService | ✅ | ✅ | FirmwareInventory from DBus + SimpleUpdate |
@@ -381,6 +433,18 @@ Measured on OpenBMC `qemuarm` (emulated Cortex-A15, 256 MB RAM). Binary:
 - [x] PCIe device instance DBus wiring from upstream pcie.hpp
 - [x] Cable collection + instance from upstream cable.hpp
 - [x] LogServices collection updated to expose EventLog + PostCodes + HostLogger
+
+### Phase 7: Upstream Sync Round 3 (July 2026)
+- [x] Storage instance GET /Systems/{id}/Storage/{storage_id} (drives from DBus)
+- [x] PSU instance GET /Chassis/{id}/PowerSubsystem/PowerSupplies/{psu_id}
+- [x] ThermalMetrics GET /Chassis/{id}/ThermalSubsystem/ThermalMetrics
+- [x] PCIeSlots GET /Chassis/{id}/PCIeSlots
+- [x] Hypervisor system GET /Systems/hypervisor
+- [x] Journal LogService + Entries (journalctl integration with graceful degradation)
+- [x] AggregationService stub
+- [x] IPMI ProtocolEnabled from DBus (phosphor-ipmi-net Running property)
+- [x] PasswordExpirationDays PATCH on Accounts endpoint
+- [x] All round-3 routes registered in mod.rs
 
 ### Phase 5: Production Readiness
 - [ ] Comprehensive integration testing

@@ -6,6 +6,7 @@ use axum::{Router, routing::{get, patch, post}};
 use std::sync::Arc;
 
 pub mod accounts;
+pub mod aggregation_service;
 pub mod certificate_service;
 pub mod chassis;
 pub mod event_service;
@@ -73,10 +74,14 @@ pub fn router() -> Router<Arc<AppState>> {
                get(systems::get_host_logger_entries))
         .route("/Systems/:system_id/Actions/ComputerSystem.Reset/ActionInfo",
                get(systems::get_reset_action_info))
+        .route("/Systems/:system_id/Storage/:storage_id",
+               get(systems::get_storage))
         .route("/Systems/:system_id/PCIeDevices",
                get(systems::get_pcie_devices_collection))
         .route("/Systems/:system_id/PCIeDevices/:pcie_id",
                get(systems::get_pcie_device))
+        .route("/Systems/hypervisor",
+               get(systems::get_hypervisor_system))
         // Chassis routes
         .route("/Chassis", get(chassis::get_chassis_collection))
         .route("/Chassis/:chassis_id",
@@ -99,6 +104,12 @@ pub fn router() -> Router<Arc<AppState>> {
                get(chassis::get_chassis_fans))
         .route("/Chassis/:chassis_id/ThermalSubsystem/Fans/:fan_id",
                get(chassis::get_chassis_fan))
+        .route("/Chassis/:chassis_id/PowerSubsystem/PowerSupplies/:psu_id",
+               get(chassis::get_chassis_power_supply))
+        .route("/Chassis/:chassis_id/ThermalSubsystem/ThermalMetrics",
+               get(chassis::get_chassis_thermal_metrics))
+        .route("/Chassis/:chassis_id/PCIeSlots",
+               get(chassis::get_chassis_pcie_slots))
         // Cables routes
         .route("/Cables", get(chassis::get_cables_collection))
         .route("/Cables/:cable_id", get(chassis::get_cable))
@@ -125,6 +136,10 @@ pub fn router() -> Router<Arc<AppState>> {
                get(managers::get_manager_bmc_log_entry))
         .route("/Managers/:manager_id/LogServices/BMC/Actions/LogService.ClearLog",
                post(managers::clear_manager_bmc_log))
+        .route("/Managers/:manager_id/LogServices/Journal",
+               get(managers::get_manager_journal_log_service))
+        .route("/Managers/:manager_id/LogServices/Journal/Entries",
+               get(managers::get_manager_journal_entries))
         .route("/Managers/:manager_id/ManagerDiagnosticData",
                get(managers::get_manager_diagnostic_data))
         .route("/Managers/:manager_id/NetworkProtocol/HTTPS/Certificates",
@@ -193,6 +208,9 @@ pub fn router() -> Router<Arc<AppState>> {
                get(update_service::get_software_inventory))
         .route("/UpdateService/Actions/UpdateService.SimpleUpdate",
                post(update_service::simple_update))
+        // AggregationService route
+        .route("/AggregationService",
+               get(aggregation_service::get_aggregation_service))
         // CertificateService routes
         .route("/CertificateService",
                get(certificate_service::get_certificate_service))

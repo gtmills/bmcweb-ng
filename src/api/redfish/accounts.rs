@@ -71,6 +71,10 @@ pub struct PatchAccountRequest {
     pub role_id: Option<String>,
     #[serde(rename = "Locked")]
     pub locked: Option<bool>,
+    /// Upstream: AccountService AccountExpiration / PasswordExpirationDays
+    /// Maps to xyz.openbmc_project.User.Attributes.UserPasswordExpiry (u64 days)
+    #[serde(rename = "PasswordExpirationDays")]
+    pub password_expiration_days: Option<u64>,
 }
 
 /// The predefined Redfish roles supported by OpenBMC.
@@ -591,6 +595,28 @@ pub async fn patch_account(
                 .await
             {
                 warn!("SetProperty UserEnabled for '{}' failed: {}", account_id, e);
+            }
+        }
+
+        // Apply PasswordExpirationDays change
+        // Upstream: AccountService schema PasswordExpirationDays → UserPasswordExpiry on DBus
+        if let Some(expiry_days) = body.password_expiration_days {
+            let user_obj = format!("/xyz/openbmc_project/user/{}", account_id);
+            if let Err(e) = client
+                .set_property(
+                    &user_obj,
+                    "xyz.openbmc_project.User.Attributes",
+                    "UserPasswordExpiry",
+                    json!(expiry_days),
+                )
+                .await
+            {
+                warn!("SetProperty UserPasswordExpiry for '{}' failed: {}", account_id, e);
+            } else {
+                info!(
+                    "Updated PasswordExpirationDays for '{}' to {}",
+                    account_id, expiry_days
+                );
             }
         }
     } else {

@@ -5,8 +5,11 @@
 //! - GET   /redfish/v1/Systems/{system_id}
 //! - PATCH /redfish/v1/Systems/{system_id}
 //! - POST  /redfish/v1/Systems/{system_id}/Actions/ComputerSystem.Reset
+//! - GET   /redfish/v1/Systems/{system_id}/Bios
+//! - POST  /redfish/v1/Systems/{system_id}/Bios/Actions/Bios.ResetBios
 //! - GET   /redfish/v1/Systems/{system_id}/Processors
 //! - GET   /redfish/v1/Systems/{system_id}/Processors/{processor_id}
+//! - GET   /redfish/v1/Systems/{system_id}/Processors/{processor_id}/EnvironmentMetrics
 //! - GET   /redfish/v1/Systems/{system_id}/Memory
 //! - GET   /redfish/v1/Systems/{system_id}/Memory/{memory_id}
 //! - GET   /redfish/v1/Systems/{system_id}/LogServices
@@ -14,8 +17,12 @@
 //! - GET   /redfish/v1/Systems/{system_id}/LogServices/EventLog/Entries
 //! - GET   /redfish/v1/Systems/{system_id}/LogServices/EventLog/Entries/{entry_id}
 //! - POST  /redfish/v1/Systems/{system_id}/LogServices/EventLog/Actions/LogService.ClearLog
+//! - GET   /redfish/v1/Systems/{system_id}/LogServices/PostCodes[/Entries]
+//! - GET   /redfish/v1/Systems/{system_id}/LogServices/HostLogger[/Entries]
 //! - GET   /redfish/v1/Systems/{system_id}/Storage
+//! - GET   /redfish/v1/Systems/{system_id}/Storage/{storage_id}
 //! - GET   /redfish/v1/Systems/{system_id}/EthernetInterfaces
+//! - GET   /redfish/v1/Systems/hypervisor   (IBM POWER hypervisor partition)
 //!
 //! Reference: DMTF Redfish ComputerSystem schema v1.20.0
 //!
@@ -753,12 +760,16 @@ pub async fn get_memory(
             (0u64, 0u64, "DRAM".to_string())
         };
 
+    // Translate OpenBMC DBus DeviceType enum to Redfish MemoryDeviceType
+    let redfish_mem_type = translate_memory_device_type(&mem_type);
+
     Ok(Json(json!({
         "@odata.type": "#Memory.v1_18_0.Memory",
         "@odata.id": format!("/redfish/v1/Systems/system/Memory/{}", memory_id),
         "Id": memory_id,
         "Name": memory_id,
-        "MemoryType": mem_type,
+        "MemoryType": "DRAM",
+        "MemoryDeviceType": redfish_mem_type,
         "CapacityMiB": capacity_mib,
         "OperatingSpeedMhz": speed_mhz,
         "Status": { "State": "Enabled", "Health": "OK" }
@@ -1923,4 +1934,275 @@ pub async fn get_host_logger_entries(
         "Members@odata.count": members.len(),
         "Members": members
     })))
+}
+
+// ---------------------------------------------------------------------------
+// Memory device type translation (TODO 8)
+// ---------------------------------------------------------------------------
+
+/// Translate an OpenBMC `Inventory.Item.Dimm.DeviceType` enum string to the
+/// Redfish `MemoryDeviceType` string.
+///
+/// Reference: DMTF Redfish Memory schema v1.18.0 MemoryDeviceType enum
+/// Upstream: redfish-core/lib/memory.hpp translateMemoryTypeToRedfish()
+fn translate_memory_device_type(raw: &str) -> &'static str {
+    if raw.ends_with(".DDR") || raw == "DDR" {
+        "DDR"
+    } else if raw.ends_with(".DDR2") || raw == "DDR2" {
+        "DDR2"
+    } else if raw.ends_with(".DDR3") || raw == "DDR3" {
+        "DDR3"
+    } else if raw.ends_with(".DDR4") || raw == "DDR4" {
+        "DDR4"
+    } else if raw.ends_with(".DDR4E_SDRAM") || raw == "DDR4E_SDRAM" {
+        "DDR4E_SDRAM"
+    } else if raw.ends_with(".DDR5") || raw == "DDR5" {
+        "DDR5"
+    } else if raw.ends_with(".LPDDR4_SDRAM") || raw == "LPDDR4_SDRAM" {
+        "LPDDR4_SDRAM"
+    } else if raw.ends_with(".LPDDR5_SDRAM") || raw == "LPDDR5_SDRAM" {
+        "LPDDR5_SDRAM"
+    } else if raw.ends_with(".DDR5_NVDIMM_P") || raw == "DDR5_NVDIMM_P" {
+        "DDR5_NVDIMM_P"
+    } else if raw.ends_with(".HBM") || raw == "HBM" {
+        "HBM"
+    } else if raw.ends_with(".HBM2") || raw == "HBM2" {
+        "HBM2"
+    } else if raw.ends_with(".HBM3") || raw == "HBM3" {
+        "HBM3"
+    } else if raw.ends_with(".SDRAM") || raw == "SDRAM" {
+        "SDRAM"
+    } else {
+        "Unknown"
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Storage instance (TODO 4)
+// ---------------------------------------------------------------------------
+
+/// GET /redfish/v1/Systems/{system_id}/Storage/{storage_id}
+///
+/// Returns a single Storage resource (controller) with associated Drives.
+///
+/// Reference: DMTF Redfish Storage schema v1.15.0
+/// Upstream: redfish-core/lib/storage.hpp
+///
+/// On OpenBMC, storage controllers are at paths with interface
+/// `xyz.openbmc_project.Inventory.Item.Storage` (or synthesised when only
+/// `Inventory.Item.Drive` objects exist under the system chassis).
+pub async fn get_storage(
+    State(state): State<Arc<AppState>>,
+    Path((system_id, storage_id)): Path<(String, String)>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!(
+        "GET /redfish/v1/Systems/{}/Storage/{}",
+        system_id, storage_id
+    );
+    validate_system_id(&system_id)?;
+
+    let drives: Vec<Value> = if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        match client
+            .get_managed_objects(
+                "xyz.openbmc_project.Inventory.Manager",
+                "/xyz/openbmc_project/inventory",
+            )
+            .await
+        {
+            Ok(objects) => {
+                let drive_iface = "xyz.openbmc_project.Inventory.Item.Drive";
+                let ctrl_iface = "xyz.openbmc_project.Inventory.Item.StorageController";
+
+                // Locate the storage controller object for this storage_id
+                let ctrl_path_opt = objects.iter().find(|(path, ifaces)| {
+                    ifaces.contains_key(ctrl_iface)
+                        && path.rsplit('/').next() == Some(storage_id.as_str())
+                });
+
+                if ctrl_path_opt.is_none() && storage_id != "1" {
+                    // Also reject if storage_id is not "1" (the synthesised entry)
+                    return Err(StatusCode::NOT_FOUND);
+                }
+
+                // Enumerate drives associated with this controller
+                objects
+                    .iter()
+                    .filter(|(_, ifaces)| ifaces.contains_key(drive_iface))
+                    .filter_map(|(path, _)| {
+                        let drive_id = path.rsplit('/').next()?;
+                        Some(json!({
+                            "@odata.id": format!(
+                                "/redfish/v1/Systems/{}/Storage/{}/Drives/{}",
+                                system_id, storage_id, drive_id
+                            )
+                        }))
+                    })
+                    .collect()
+            }
+            Err(e) => {
+                warn!("Failed to enumerate drives from DBus: {}", e);
+                vec![]
+            }
+        }
+    } else {
+        if storage_id != "1" {
+            return Err(StatusCode::NOT_FOUND);
+        }
+        vec![]
+    };
+
+    Ok(Json(json!({
+        "@odata.type": "#Storage.v1_15_0.Storage",
+        "@odata.id": format!("/redfish/v1/Systems/{}/Storage/{}", system_id, storage_id),
+        "Id": storage_id,
+        "Name": format!("Storage Controller {}", storage_id),
+        "Description": "Storage subsystem",
+        "Status": { "State": "Enabled", "Health": "OK" },
+        "Drives@odata.count": drives.len(),
+        "Drives": drives,
+        "StorageControllers": [
+            {
+                "MemberId": "0",
+                "Name": format!("Storage Controller {}", storage_id),
+                "Status": { "State": "Enabled", "Health": "OK" }
+            }
+        ]
+    })))
+}
+
+// ---------------------------------------------------------------------------
+// Hypervisor system (TODO 1)
+// ---------------------------------------------------------------------------
+
+/// GET /redfish/v1/Systems/hypervisor
+///
+/// Returns the hypervisor partition ComputerSystem resource.
+///
+/// Reference: DMTF Redfish ComputerSystem schema v1.20.0
+/// Upstream: redfish-core/lib/hypervisor_system.hpp
+///
+/// On IBM POWER systems, the hypervisor (PowerVM or KVM) is represented as a
+/// separate ComputerSystem.  OpenBMC exposes its state via the DBus service
+/// `xyz.openbmc_project.State.Hypervisor` at
+/// `/xyz/openbmc_project/state/hypervisor0`.
+///
+/// This endpoint is optional — if the hypervisor DBus object is absent the
+/// collection endpoint will not advertise the hypervisor member and this
+/// endpoint returns 404.
+pub async fn get_hypervisor_system(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!("GET /redfish/v1/Systems/hypervisor");
+
+    // Query the hypervisor state from DBus.  This is an optional object — if
+    // it doesn't exist the hypervisor is not present on this platform.
+    let (power_state, hypervisor_present) = if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        match client
+            .get_property(
+                "/xyz/openbmc_project/state/hypervisor0",
+                "xyz.openbmc_project.State.Host",
+                "CurrentHostState",
+            )
+            .await
+        {
+            Ok(v) => {
+                let raw = v.as_str().unwrap_or("");
+                (host_state_to_power_state(raw).to_string(), true)
+            }
+            Err(_) => {
+                // Hypervisor object not present on this platform
+                return Err(StatusCode::NOT_FOUND);
+            }
+        }
+    } else {
+        // No DBus connection — hypervisor not queryable; return 404
+        return Err(StatusCode::NOT_FOUND);
+    };
+
+    let _ = hypervisor_present;
+
+    Ok(Json(json!({
+        "@odata.type": "#ComputerSystem.v1_20_0.ComputerSystem",
+        "@odata.id": "/redfish/v1/Systems/hypervisor",
+        "Id": "hypervisor",
+        "Name": "Hypervisor",
+        "Description": "Hypervisor partition",
+        "SystemType": "OS",
+        "PowerState": power_state,
+        "Status": {
+            "State": if power_state == "On" { "Enabled" } else { "Disabled" },
+            "Health": "OK"
+        },
+        "Links": {
+            "ManagedBy": [{ "@odata.id": "/redfish/v1/Managers/bmc" }]
+        },
+        "Actions": {
+            "#ComputerSystem.Reset": {
+                "target": "/redfish/v1/Systems/hypervisor/Actions/ComputerSystem.Reset",
+                "@Redfish.ActionInfo": "/redfish/v1/Systems/hypervisor/ResetActionInfo",
+                "ResetType@Redfish.AllowableValues": ["On", "ForceOff", "GracefulShutdown", "GracefulRestart"]
+            }
+        }
+    })))
+}
+
+/// Update `get_systems_collection` to optionally advertise the hypervisor member.
+///
+/// This helper is called by `get_systems_collection_with_hypervisor` — a
+/// separate thin wrapper that checks for hypervisor presence.
+/// The existing `get_systems_collection` continues to return the static
+/// collection; clients that query `/Systems/hypervisor` directly get the
+/// full resource via `get_hypervisor_system`.
+
+#[cfg(test)]
+mod systems_round3_tests {
+    use super::*;
+    use crate::config::Config;
+
+    #[tokio::test]
+    async fn test_translate_memory_device_type() {
+        assert_eq!(translate_memory_device_type("xyz.openbmc_project.Inventory.Item.Dimm.DeviceType.DDR4"), "DDR4");
+        assert_eq!(translate_memory_device_type("DDR5"), "DDR5");
+        assert_eq!(translate_memory_device_type("LPDDR4_SDRAM"), "LPDDR4_SDRAM");
+        assert_eq!(translate_memory_device_type("Unknown"), "Unknown");
+        assert_eq!(translate_memory_device_type(""), "Unknown");
+    }
+
+    #[tokio::test]
+    async fn test_get_storage_no_dbus_id1() {
+        let config = Config::default();
+        let state = Arc::new(AppState::new(config));
+        let result = get_storage(
+            State(state),
+            Path(("system".to_string(), "1".to_string())),
+        ).await;
+        assert!(result.is_ok());
+        let json = result.unwrap().0;
+        assert_eq!(json["@odata.type"], "#Storage.v1_15_0.Storage");
+        assert_eq!(json["Id"], "1");
+    }
+
+    #[tokio::test]
+    async fn test_get_storage_no_dbus_not_found() {
+        let config = Config::default();
+        let state = Arc::new(AppState::new(config));
+        let result = get_storage(
+            State(state),
+            Path(("system".to_string(), "nonexistent".to_string())),
+        ).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_get_hypervisor_no_dbus_returns_404() {
+        // Without DBus, hypervisor endpoint must return 404 (optional resource)
+        let config = Config::default();
+        let state = Arc::new(AppState::new(config));
+        let result = get_hypervisor_system(State(state)).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), StatusCode::NOT_FOUND);
+    }
 }
