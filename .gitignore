@@ -28,3 +28,9 @@ config.local.toml
 
 # Test artifacts
 /coverage/
+
+# Scratch / commit helper files — never commit these
+_commitmsg.txt
+_msg_fix.py
+_filter_callback.py
+_replace_msg.txt

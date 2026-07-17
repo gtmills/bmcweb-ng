@@ -3,7 +3,7 @@
 ## Overview
 This document tracks the development progress of bmcweb-ng, a Rust rewrite of the OpenBMC bmcweb server.
 
-**Last Updated:** 2026-07-15
+**Last Updated:** 2026-07-15 — v0.4.0
 
 ## Project Structure
 
@@ -366,6 +366,8 @@ Measured on OpenBMC `qemuarm` (emulated Cortex-A15, 256 MB RAM). Binary:
 | Startup Time | <1s | ~1.6s | ⚠️ Over on QEMU (~5-10× slower than bare metal) |
 | Request Latency (p99) | <100ms | **7ms** | ✅ Met |
 | Concurrent 20 GETs | — | 20/20 ✅ | ✅ All successful |
+| Redfish routes (v0.4.0) | — | **60+** | ✅ All endpoints return valid JSON |
+| Unit tests (v0.4.0) | — | **149** | ✅ 0 failures |
 
 ## Development Roadmap
 

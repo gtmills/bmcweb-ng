@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [0.4.0] - 2026-07-15
+
+### Added
+
+- **10 new upstream Redfish endpoints (Round 3 upstream sync)**
+
+  - `GET /Systems/{id}/Storage/{storage_id}` — Storage controller instance with
+    drive enumeration from `Inventory.Item.Drive` DBus objects
+    (`redfish-core/lib/storage.hpp`)
+
+  - `GET /Chassis/{id}/PowerSubsystem/PowerSupplies/{psu_id}` — Individual power
+    supply instance; reads state, input/output wattage, and firmware version from
+    DBus (`redfish-core/lib/power_supply.hpp`)
+
+  - `GET /Chassis/{id}/ThermalSubsystem/ThermalMetrics` — Temperature sensor
+    readings from DBus sensor tree (`redfish-core/lib/thermal_metrics.hpp`)
+
+  - `GET /Chassis/{id}/PCIeSlots` — PCIe slot inventory from
+    `Inventory.Item.PCIeSlot` DBus objects (`redfish-core/lib/pcie_slots.hpp`)
+
+  - `GET /Systems/hypervisor` — IBM POWER hypervisor partition stub; returns 404
+    when no hypervisor DBus object present
+    (`redfish-core/lib/hypervisor_system.hpp`)
+
+  - `GET /Managers/{id}/LogServices/Journal[/Entries]` — Systemd journal log
+    service; entries read from `journalctl -o short-precise -n 200` with graceful
+    degradation to empty list when `journalctl` is unavailable
+    (`redfish-core/lib/manager_logservices_journal.hpp`). Manager `LogServices`
+    collection count updated 2 → 3.
+
+  - `GET /AggregationService` — Aggregation service stub with
+    `ServiceEnabled: false` (`redfish-core/lib/aggregation_service.hpp`)
+
+- **IPMI ProtocolEnabled from DBus** (`managers.rs`) — `NetworkProtocol.IPMI.ProtocolEnabled`
+  now reads the `Running` property from
+  `xyz.openbmc_project.Control.Service.Attributes` on the
+  `/control/service/phosphor_2dipmi_2dnet` object; falls back to `true` when
+  the property is unavailable. Matches upstream commit `9352bdc8`.
+
+- **`PasswordExpirationDays` PATCH** (`accounts.rs`) — `PATCH /AccountService/Accounts/{id}`
+  now accepts `PasswordExpirationDays` (uint64). Writes `UserPasswordExpiry` via
+  `set_property` on `xyz.openbmc_project.User.Attributes`.
+
 ### Fixed
 
 - **axum 0.7 catch-all routing** (`src/api/dbus_rest.rs`) — DBus REST routes
@@ -20,53 +65,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Moved to the open (optional-auth) router. Added `/redfish/v1/` trailing-slash
   alias for compatibility with the DMTF Redfish Service Validator.
 
-### Added
-
-- **DMTF Redfish Service Validator integration** (`scripts/_run_validator.sh`)
-  — New script that boots rainier-bmc QEMU, injects bmcweb-ng, and runs the
-  DMTF `RedfishServiceValidator.py` against the live service. Accepts
-  `REDFISH_VALIDATOR`, `BMCWEB_USER`, `BMCWEB_PASS`, and `VALIDATOR_LOG_DIR`
-  environment overrides. Logs to `/tmp/redfish_validator_logs/` by default.
-
-- **Expanded e2e test suite** (`scripts/_e2e_test.py`) — Grew from 11 to 69
-  tests across all major Redfish endpoints. Now covers: ServiceRoot (7 checks
-  including unauthenticated access and link verification), Systems collection +
-  instance + all sub-resources (Processors, Memory, Storage, EthernetInterfaces,
-  LogServices, EventLog/Entries), Chassis collection + instance + Power/Thermal/
-  Sensors, Managers collection + instance + NetworkProtocol/EthernetInterfaces/
-  LogServices, SessionService + Sessions (including POST login), AccountService +
-  Accounts + Roles + individual role, Registries, JsonSchemas, EventService +
-  Subscriptions, TaskService + Tasks, UpdateService + FirmwareInventory,
-  CertificateService, TelemetryService, `/health` endpoint, and a negative test
-  confirming 401 on unauthenticated requests to protected endpoints.
-
-- **Path auto-detection** (`scripts/_e2e_test.py`) — `IMGDIR` and `BMCWEB_NG`
-  are now derived from the script's own path via `__file__`, eliminating all
-  hardcoded user-specific paths. Startup checks fail fast with a clear error
-  if the image dir or binary is missing.
-
-- **`SKIP_TEARDOWN=1` mode** (`scripts/_e2e_test.py`) — When set, the script
-  keeps QEMU running after tests complete (without printing a summary or calling
-  `sys.exit`), allowing external tooling (e.g. the DMTF validator) to run
-  against the live service.
-
 ### Changed
 
-- **QEMU_SETUP.md** — Added full p10bmc / IBM Rainier section covering image
-  layout differences, prerequisites (QEMU ≥ 7.1, rainier-bmc machine type),
-  exact QEMU command line, port forwarding table, binary injection steps,
-  debugging commands, and known limitations.
-
-- **`.cargo/config.toml`** — Clarified that `arm-unknown-linux-gnueabihf`
-  cross-compiles for both generic `qemuarm` and IBM Rainier (AST2600).
+- **`.gitignore`** — Added scratch/commit helper file patterns (`_commitmsg.txt`,
+  `_msg_fix.py`, `_filter_callback.py`, `_replace_msg.txt`) to prevent accidental
+  commits of ephemeral development tooling.
 
 - **`DEVELOPMENT_STATUS.md`** — Updated "Not Yet Implemented" section to
   reflect completed features: DBus REST API, KVM WebSocket, Virtual Media,
   mTLS, Registries/JsonSchemas are all implemented. Only LDAP integration
-  and complete Virtual Media data-path remain open.
+  and complete Virtual Media data-path remain open. Added v0.4.0 performance
+  table rows (60+ routes, 149 unit tests).
+
+- **DMTF Redfish Service Validator integration** (`scripts/_run_validator.sh`)
+  — New script that boots rainier-bmc QEMU, injects bmcweb-ng, and runs the
+  DMTF `RedfishServiceValidator.py` against the live service.
+
+- **Expanded e2e test suite** (`scripts/_e2e_test.py`) — Grew to 69 tests
+  covering all major Redfish endpoints, with path auto-detection from `__file__`
+  and `SKIP_TEARDOWN=1` mode for external tooling integration.
+
+- **QEMU_SETUP.md** — Added full p10bmc / IBM Rainier section.
+
+- **`.cargo/config.toml`** — Clarified cross-compilation targets.
+
+### Tests
+
+- 149 unit tests passing (up from 134 at v0.3.0). Zero failures.
+- New tests for Journal LogService, AggregationService, PSU instance,
+  ThermalMetrics, PCIeSlots, Storage instance, Hypervisor endpoint.
 
 ---
-
 
 ## [0.3.0] - 2026-07-11
 
@@ -488,7 +517,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Apache 2.0 license
 - Git repository initialization
 
-[Unreleased]: https://github.com/gtmills/bmcweb-ng/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/gtmills/bmcweb-ng/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/gtmills/bmcweb-ng/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/gtmills/bmcweb-ng/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/gtmills/bmcweb-ng/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/gtmills/bmcweb-ng/compare/v0.1.0...v0.2.0
