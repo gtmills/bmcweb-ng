@@ -837,3 +837,460 @@ pub async fn get_chassis_assembly(
         "Assemblies@odata.count": assemblies.len()
     })))
 }
+
+// ---------------------------------------------------------------------------
+// PowerSubsystem
+// ---------------------------------------------------------------------------
+
+/// GET /redfish/v1/Chassis/{chassis_id}/PowerSubsystem
+///
+/// Returns the PowerSubsystem resource for this chassis.
+///
+/// Reference: DMTF Redfish PowerSubsystem schema v1.1.0
+/// Upstream: redfish-core/lib/power_subsystem.hpp
+///
+/// The PowerSubsystem is the newer replacement for the legacy Power resource.
+/// It provides links to the PowerSupplies sub-collection.
+pub async fn get_chassis_power_subsystem(
+    State(_state): State<Arc<AppState>>,
+    Path(chassis_id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!("GET /redfish/v1/Chassis/{}/PowerSubsystem", chassis_id);
+    validate_chassis_id(&chassis_id)?;
+
+    Ok(Json(json!({
+        "@odata.type": "#PowerSubsystem.v1_1_0.PowerSubsystem",
+        "@odata.id": format!("/redfish/v1/Chassis/{}/PowerSubsystem", chassis_id),
+        "Id": "PowerSubsystem",
+        "Name": "Power Subsystem",
+        "Description": "Chassis Power Subsystem",
+        "Status": { "State": "Enabled", "Health": "OK" },
+        "PowerSupplies": {
+            "@odata.id": format!(
+                "/redfish/v1/Chassis/{}/PowerSubsystem/PowerSupplies",
+                chassis_id
+            )
+        }
+    })))
+}
+
+/// GET /redfish/v1/Chassis/{chassis_id}/PowerSubsystem/PowerSupplies
+///
+/// Returns the PowerSupply collection for this chassis.
+///
+/// On OpenBMC, power supply objects have interface
+/// `xyz.openbmc_project.Inventory.Item.PowerSupply` in the inventory tree.
+pub async fn get_chassis_power_supplies(
+    State(state): State<Arc<AppState>>,
+    Path(chassis_id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!(
+        "GET /redfish/v1/Chassis/{}/PowerSubsystem/PowerSupplies",
+        chassis_id
+    );
+    validate_chassis_id(&chassis_id)?;
+
+    let members: Vec<Value> = if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        match client
+            .get_managed_objects(
+                "xyz.openbmc_project.Inventory.Manager",
+                "/xyz/openbmc_project/inventory",
+            )
+            .await
+        {
+            Ok(objects) => {
+                let psu_iface = "xyz.openbmc_project.Inventory.Item.PowerSupply";
+                let mut psus: Vec<String> = objects
+                    .iter()
+                    .filter(|(_, ifaces)| ifaces.contains_key(psu_iface))
+                    .filter_map(|(path, _)| path.rsplit('/').next().map(|s| s.to_string()))
+                    .collect();
+                psus.sort();
+                psus.iter()
+                    .map(|id| json!({
+                        "@odata.id": format!(
+                            "/redfish/v1/Chassis/{}/PowerSubsystem/PowerSupplies/{}",
+                            chassis_id, id
+                        )
+                    }))
+                    .collect()
+            }
+            Err(e) => {
+                warn!("Failed to enumerate PSUs from DBus: {}", e);
+                vec![]
+            }
+        }
+    } else {
+        vec![]
+    };
+
+    Ok(Json(json!({
+        "@odata.type": "#PowerSupplyCollection.PowerSupplyCollection",
+        "@odata.id": format!(
+            "/redfish/v1/Chassis/{}/PowerSubsystem/PowerSupplies",
+            chassis_id
+        ),
+        "Name": "Power Supply Collection",
+        "Members@odata.count": members.len(),
+        "Members": members
+    })))
+}
+
+// ---------------------------------------------------------------------------
+// ThermalSubsystem + Fans
+// ---------------------------------------------------------------------------
+
+/// GET /redfish/v1/Chassis/{chassis_id}/ThermalSubsystem
+///
+/// Returns the ThermalSubsystem resource for this chassis.
+///
+/// Reference: DMTF Redfish ThermalSubsystem schema v1_3_0
+/// Upstream: redfish-core/lib/thermal_subsystem.hpp
+///
+/// The ThermalSubsystem is the newer replacement for the legacy Thermal resource.
+/// It provides links to the Fans sub-collection and ThermalMetrics.
+pub async fn get_chassis_thermal_subsystem(
+    State(_state): State<Arc<AppState>>,
+    Path(chassis_id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!(
+        "GET /redfish/v1/Chassis/{}/ThermalSubsystem",
+        chassis_id
+    );
+    validate_chassis_id(&chassis_id)?;
+
+    Ok(Json(json!({
+        "@odata.type": "#ThermalSubsystem.v1_3_0.ThermalSubsystem",
+        "@odata.id": format!("/redfish/v1/Chassis/{}/ThermalSubsystem", chassis_id),
+        "Id": "ThermalSubsystem",
+        "Name": "Thermal Subsystem",
+        "Description": "Chassis Thermal Subsystem",
+        "Status": { "State": "Enabled", "Health": "OK" },
+        "Fans": {
+            "@odata.id": format!(
+                "/redfish/v1/Chassis/{}/ThermalSubsystem/Fans",
+                chassis_id
+            )
+        },
+        "ThermalMetrics": {
+            "@odata.id": format!(
+                "/redfish/v1/Chassis/{}/ThermalSubsystem/ThermalMetrics",
+                chassis_id
+            )
+        }
+    })))
+}
+
+/// GET /redfish/v1/Chassis/{chassis_id}/ThermalSubsystem/Fans
+///
+/// Returns the Fan collection for this chassis.
+///
+/// Reference: DMTF Redfish FanCollection schema
+/// Upstream: redfish-core/lib/fan.hpp
+///
+/// On OpenBMC, fan sensor objects live under `/xyz/openbmc_project/sensors/fan_tach/`
+/// with interface `xyz.openbmc_project.Sensor.Value`.
+pub async fn get_chassis_fans(
+    State(state): State<Arc<AppState>>,
+    Path(chassis_id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!(
+        "GET /redfish/v1/Chassis/{}/ThermalSubsystem/Fans",
+        chassis_id
+    );
+    validate_chassis_id(&chassis_id)?;
+
+    let members: Vec<Value> = if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        match client
+            .get_managed_objects(
+                "xyz.openbmc_project.Sensor",
+                "/xyz/openbmc_project/sensors",
+            )
+            .await
+        {
+            Ok(objects) => {
+                let sensor_iface = "xyz.openbmc_project.Sensor.Value";
+                let mut fan_ids: Vec<String> = objects
+                    .iter()
+                    .filter(|(path, ifaces)| {
+                        (path.contains("/sensors/fan_tach/") || path.contains("/sensors/fan/"))
+                            && ifaces.contains_key(sensor_iface)
+                    })
+                    .filter_map(|(path, _)| path.rsplit('/').next().map(|s| s.to_string()))
+                    .collect();
+                fan_ids.sort();
+                fan_ids.dedup();
+                fan_ids.iter()
+                    .map(|id| json!({
+                        "@odata.id": format!(
+                            "/redfish/v1/Chassis/{}/ThermalSubsystem/Fans/{}",
+                            chassis_id, id
+                        )
+                    }))
+                    .collect()
+            }
+            Err(e) => {
+                warn!("Failed to enumerate fans from DBus: {}", e);
+                vec![]
+            }
+        }
+    } else {
+        vec![]
+    };
+
+    Ok(Json(json!({
+        "@odata.type": "#FanCollection.FanCollection",
+        "@odata.id": format!(
+            "/redfish/v1/Chassis/{}/ThermalSubsystem/Fans",
+            chassis_id
+        ),
+        "Name": "Fan Collection",
+        "Members@odata.count": members.len(),
+        "Members": members
+    })))
+}
+
+/// GET /redfish/v1/Chassis/{chassis_id}/ThermalSubsystem/Fans/{fan_id}
+///
+/// Returns a single Fan resource.
+///
+/// Reference: DMTF Redfish Fan schema v1_5_0
+/// Upstream: redfish-core/lib/fan.hpp
+pub async fn get_chassis_fan(
+    State(state): State<Arc<AppState>>,
+    Path((chassis_id, fan_id)): Path<(String, String)>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!(
+        "GET /redfish/v1/Chassis/{}/ThermalSubsystem/Fans/{}",
+        chassis_id, fan_id
+    );
+    validate_chassis_id(&chassis_id)?;
+
+    let (speed_rpm, status_health) = if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        let sensor_iface = "xyz.openbmc_project.Sensor.Value";
+
+        // Try fan_tach first, then fan
+        let paths = [
+            format!("/xyz/openbmc_project/sensors/fan_tach/{}", fan_id),
+            format!("/xyz/openbmc_project/sensors/fan/{}", fan_id),
+        ];
+        let mut rpm = None;
+        let mut health = "OK";
+        for path in &paths {
+            if let Ok(props) = client.get_all_properties(path, sensor_iface).await {
+                rpm = props.get("Value").and_then(|v| v.as_f64());
+                // Check for alarm condition
+                if props.get("WarningAlarmHigh").and_then(|v| v.as_bool()).unwrap_or(false)
+                    || props.get("WarningAlarmLow").and_then(|v| v.as_bool()).unwrap_or(false)
+                {
+                    health = "Warning";
+                }
+                if props.get("CriticalAlarmHigh").and_then(|v| v.as_bool()).unwrap_or(false)
+                    || props.get("CriticalAlarmLow").and_then(|v| v.as_bool()).unwrap_or(false)
+                {
+                    health = "Critical";
+                }
+                break;
+            }
+        }
+        (rpm, health.to_string())
+    } else {
+        (None, "OK".to_string())
+    };
+
+    Ok(Json(json!({
+        "@odata.type": "#Fan.v1_5_0.Fan",
+        "@odata.id": format!(
+            "/redfish/v1/Chassis/{}/ThermalSubsystem/Fans/{}",
+            chassis_id, fan_id
+        ),
+        "Id": fan_id,
+        "Name": fan_id,
+        "SpeedPercent": {
+            "DataSourceUri": format!(
+                "/redfish/v1/Chassis/{}/Sensors/fan_tach_{}",
+                chassis_id, fan_id
+            ),
+            "Reading": speed_rpm
+        },
+        "Status": { "State": "Enabled", "Health": status_health }
+    })))
+}
+
+// ---------------------------------------------------------------------------
+// Cables
+// ---------------------------------------------------------------------------
+
+/// GET /redfish/v1/Cables
+///
+/// Returns the Cable collection.
+///
+/// Reference: DMTF Redfish CableCollection schema
+/// Upstream: redfish-core/lib/cable.hpp
+///
+/// On OpenBMC, cable inventory objects have interface
+/// `xyz.openbmc_project.Inventory.Item.Cable` in the inventory tree.
+pub async fn get_cables_collection(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!("GET /redfish/v1/Cables");
+
+    let members: Vec<Value> = if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        match client
+            .get_managed_objects(
+                "xyz.openbmc_project.Inventory.Manager",
+                "/xyz/openbmc_project/inventory",
+            )
+            .await
+        {
+            Ok(objects) => {
+                let cable_iface = "xyz.openbmc_project.Inventory.Item.Cable";
+                let mut cable_ids: Vec<String> = objects
+                    .iter()
+                    .filter(|(_, ifaces)| ifaces.contains_key(cable_iface))
+                    .filter_map(|(path, _)| path.rsplit('/').next().map(|s| s.to_string()))
+                    .collect();
+                cable_ids.sort();
+                cable_ids.iter()
+                    .map(|id| json!({
+                        "@odata.id": format!("/redfish/v1/Cables/{}", id)
+                    }))
+                    .collect()
+            }
+            Err(e) => {
+                warn!("Failed to enumerate cables from DBus: {}", e);
+                vec![]
+            }
+        }
+    } else {
+        vec![]
+    };
+
+    Ok(Json(json!({
+        "@odata.type": "#CableCollection.CableCollection",
+        "@odata.id": "/redfish/v1/Cables",
+        "Name": "Cable Collection",
+        "Members@odata.count": members.len(),
+        "Members": members
+    })))
+}
+
+/// GET /redfish/v1/Cables/{cable_id}
+///
+/// Returns a single Cable resource.
+///
+/// Reference: DMTF Redfish Cable schema v1_2_0
+/// Upstream: redfish-core/lib/cable.hpp
+///
+/// On OpenBMC, cable objects have:
+///   interface: xyz.openbmc_project.Inventory.Item.Cable
+///   properties: CableTypeDescription, CableStatus, Length
+pub async fn get_cable(
+    State(state): State<Arc<AppState>>,
+    Path(cable_id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!("GET /redfish/v1/Cables/{}", cable_id);
+
+    if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        if let Ok(objects) = client
+            .get_managed_objects(
+                "xyz.openbmc_project.Inventory.Manager",
+                "/xyz/openbmc_project/inventory",
+            )
+            .await
+        {
+            let cable_iface = "xyz.openbmc_project.Inventory.Item.Cable";
+            for (path, ifaces) in &objects {
+                let id = path.rsplit('/').next().unwrap_or("");
+                if id == cable_id && ifaces.contains_key(cable_iface) {
+                    let props = &ifaces[cable_iface];
+                    let cable_type_desc = props
+                        .get("CableTypeDescription")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Unknown")
+                        .to_string();
+                    let cable_status = props
+                        .get("CableStatus")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| {
+                            if s.ends_with(".Active") { Some("Active") }
+                            else if s.ends_with(".Inactive") { Some("Inactive") }
+                            else { None }
+                        })
+                        .unwrap_or("Normal")
+                        .to_string();
+                    let length = props
+                        .get("Length")
+                        .and_then(|v| v.as_f64());
+                    return Ok(Json(json!({
+                        "@odata.type": "#Cable.v1_2_0.Cable",
+                        "@odata.id": format!("/redfish/v1/Cables/{}", cable_id),
+                        "Id": cable_id,
+                        "Name": format!("Cable {}", cable_id),
+                        "CableTypeDescription": cable_type_desc,
+                        "CableStatus": cable_status,
+                        "LengthMeters": length,
+                        "Status": { "State": "Enabled", "Health": "OK" }
+                    })));
+                }
+            }
+        }
+    }
+    Err(StatusCode::NOT_FOUND)
+}
+
+#[cfg(test)]
+mod chassis_new_tests {
+    use super::*;
+    use crate::config::Config;
+
+    #[tokio::test]
+    async fn test_get_chassis_power_subsystem() {
+        let config = Config::default();
+        let state = Arc::new(AppState::new(config));
+        let result = get_chassis_power_subsystem(State(state), Path("chassis".to_string())).await;
+        assert!(result.is_ok());
+        let json = result.unwrap().0;
+        assert_eq!(json["@odata.type"], "#PowerSubsystem.v1_1_0.PowerSubsystem");
+        assert_eq!(json["Id"], "PowerSubsystem");
+        assert!(json["PowerSupplies"]["@odata.id"].is_string());
+    }
+
+    #[tokio::test]
+    async fn test_get_chassis_thermal_subsystem() {
+        let config = Config::default();
+        let state = Arc::new(AppState::new(config));
+        let result = get_chassis_thermal_subsystem(State(state), Path("chassis".to_string())).await;
+        assert!(result.is_ok());
+        let json = result.unwrap().0;
+        assert_eq!(json["@odata.type"], "#ThermalSubsystem.v1_3_0.ThermalSubsystem");
+        assert_eq!(json["Id"], "ThermalSubsystem");
+        assert!(json["Fans"]["@odata.id"].is_string());
+    }
+
+    #[tokio::test]
+    async fn test_get_chassis_fans_no_dbus() {
+        let config = Config::default();
+        let state = Arc::new(AppState::new(config));
+        let result = get_chassis_fans(State(state), Path("chassis".to_string())).await;
+        assert!(result.is_ok());
+        let json = result.unwrap().0;
+        assert_eq!(json["Members@odata.count"], 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_cables_collection_no_dbus() {
+        let config = Config::default();
+        let state = Arc::new(AppState::new(config));
+        let result = get_cables_collection(State(state)).await;
+        assert!(result.is_ok());
+        let json = result.unwrap().0;
+        assert_eq!(json["@odata.type"], "#CableCollection.CableCollection");
+        assert_eq!(json["Members@odata.count"], 0);
+    }
+}

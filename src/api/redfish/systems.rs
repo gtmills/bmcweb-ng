@@ -292,6 +292,7 @@ pub async fn get_system(
                 ]
             }
         },
+        "Bios": { "@odata.id": "/redfish/v1/Systems/system/Bios" },
         "Processors": { "@odata.id": "/redfish/v1/Systems/system/Processors" },
         "Memory": { "@odata.id": "/redfish/v1/Systems/system/Memory" },
         "Storage": { "@odata.id": "/redfish/v1/Systems/system/Storage" },
@@ -781,9 +782,11 @@ pub async fn get_system_log_services(
         "@odata.id": "/redfish/v1/Systems/system/LogServices",
         "Name": "System Log Services Collection",
         "Description": "Collection of LogServices for this Computer System",
-        "Members@odata.count": 1,
+        "Members@odata.count": 3,
         "Members": [
-            { "@odata.id": "/redfish/v1/Systems/system/LogServices/EventLog" }
+            { "@odata.id": "/redfish/v1/Systems/system/LogServices/EventLog" },
+            { "@odata.id": "/redfish/v1/Systems/system/LogServices/PostCodes" },
+            { "@odata.id": "/redfish/v1/Systems/system/LogServices/HostLogger" }
         ]
     })))
 }
@@ -1237,7 +1240,7 @@ mod tests {
         let result = get_system_log_services(State(state), Path("system".to_string())).await;
         assert!(result.is_ok());
         let json = result.unwrap().0;
-        assert_eq!(json["Members@odata.count"], 1);
+        assert_eq!(json["Members@odata.count"], 3);
     }
 
     #[tokio::test]
@@ -1402,4 +1405,522 @@ pub async fn get_pcie_device(
         }
     }
     Err(StatusCode::NOT_FOUND)
+}
+
+// ---------------------------------------------------------------------------
+// BIOS
+// ---------------------------------------------------------------------------
+
+/// GET /redfish/v1/Systems/{system_id}/Bios
+///
+/// Returns the BIOS resource for this system.
+///
+/// Reference: DMTF Redfish Bios schema v1.1.0
+/// Upstream: redfish-core/lib/bios.hpp
+///
+/// On OpenBMC, BIOS software objects live at `/xyz/openbmc_project/software`
+/// with `xyz.openbmc_project.Software.Version` and purpose
+/// `xyz.openbmc_project.Software.Version.VersionPurpose.Host`.
+pub async fn get_bios(
+    State(state): State<Arc<AppState>>,
+    Path(system_id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!("GET /redfish/v1/Systems/{}/Bios", system_id);
+    validate_system_id(&system_id)?;
+
+    // Attempt to read the BIOS firmware version from DBus
+    let bios_version = if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        // On IBM OpenBMC the host firmware object is at /xyz/openbmc_project/software/host_active
+        // The VersionPurpose property ends with ".Host" for BIOS images
+        let version = client
+            .get_property(
+                "/xyz/openbmc_project/software/host_active",
+                "xyz.openbmc_project.Software.Version",
+                "Version",
+            )
+            .await
+            .ok()
+            .and_then(|v| v.as_str().map(|s| s.to_string()));
+
+        // Fall back to enumerating software objects for one with Host purpose
+        if version.is_none() {
+            if let Ok(objects) = client
+                .get_managed_objects(
+                    "xyz.openbmc_project.Software.BMC.Updater",
+                    "/xyz/openbmc_project/software",
+                )
+                .await
+            {
+                let sw_iface = "xyz.openbmc_project.Software.Version";
+                objects
+                    .iter()
+                    .filter_map(|(_, ifaces)| {
+                        let props = ifaces.get(sw_iface)?;
+                        let purpose = props.get("Purpose")?.as_str()?;
+                        if purpose.ends_with(".Host") {
+                            props.get("Version")?.as_str().map(|s| s.to_string())
+                        } else {
+                            None
+                        }
+                    })
+                    .next()
+                    .unwrap_or_else(|| "Unknown".to_string())
+            } else {
+                "Unknown".to_string()
+            }
+        } else {
+            version.unwrap_or_else(|| "Unknown".to_string())
+        }
+    } else {
+        "Unknown".to_string()
+    };
+
+    Ok(Json(json!({
+        "@odata.type": "#Bios.v1_1_0.Bios",
+        "@odata.id": format!("/redfish/v1/Systems/{}/Bios", system_id),
+        "Id": "BIOS",
+        "Name": "BIOS Configuration",
+        "Description": "BIOS Configuration Service",
+        "BiosVersion": bios_version,
+        "Actions": {
+            "#Bios.ResetBios": {
+                "target": format!(
+                    "/redfish/v1/Systems/{}/Bios/Actions/Bios.ResetBios",
+                    system_id
+                )
+            }
+        }
+    })))
+}
+
+/// POST /redfish/v1/Systems/{system_id}/Bios/Actions/Bios.ResetBios
+///
+/// Resets BIOS settings to factory defaults.
+///
+/// OpenBMC DBus:
+///   Service:   org.open_power.Software.Host.Updater
+///   Object:    /xyz/openbmc_project/software
+///   Method:    xyz.openbmc_project.Common.FactoryReset / Reset
+pub async fn reset_bios(
+    State(state): State<Arc<AppState>>,
+    Extension(session): Extension<UserSession>,
+    Path(system_id): Path<String>,
+) -> Result<StatusCode, StatusCode> {
+    debug!(
+        "POST /redfish/v1/Systems/{}/Bios/Actions/Bios.ResetBios",
+        system_id
+    );
+    check_privilege(Some(&session), PRIVILEGE_ACTION)?;
+    validate_system_id(&system_id)?;
+
+    if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        match client
+            .call_method(
+                "org.open_power.Software.Host.Updater",
+                "/xyz/openbmc_project/software",
+                "xyz.openbmc_project.Common.FactoryReset",
+                "Reset",
+                None,
+            )
+            .await
+        {
+            Ok(_) => info!("BIOS reset initiated via DBus"),
+            Err(e) => warn!("BIOS reset DBus call failed: {}", e),
+        }
+    } else {
+        warn!("BIOS reset requested — no DBus connection");
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ---------------------------------------------------------------------------
+// EnvironmentMetrics for Processors
+// ---------------------------------------------------------------------------
+
+/// GET /redfish/v1/Systems/{system_id}/Processors/{processor_id}/EnvironmentMetrics
+///
+/// Returns environmental metrics (temperature, power) for a specific processor.
+///
+/// Reference: DMTF Redfish EnvironmentMetrics schema v1.3.0
+/// Upstream: redfish-core/lib/environment_metrics.hpp (commit 45b86809)
+///
+/// On OpenBMC, processor temperature and power sensors follow the naming
+/// convention `/xyz/openbmc_project/sensors/temperature/p0_core*` or
+/// `/xyz/openbmc_project/sensors/power/p0_*`.
+pub async fn get_processor_environment_metrics(
+    State(state): State<Arc<AppState>>,
+    Path((system_id, processor_id)): Path<(String, String)>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!(
+        "GET /redfish/v1/Systems/{}/Processors/{}/EnvironmentMetrics",
+        system_id, processor_id
+    );
+    validate_system_id(&system_id)?;
+
+    // Derive a sensor prefix from the processor id:
+    // cpuN → pN (e.g. cpu0 → p0, cpu1 → p1)
+    // This matches the OpenBMC sensor naming convention for IBM POWER systems.
+    let sensor_prefix = if let Some(num) = processor_id.strip_prefix("cpu") {
+        format!("p{}_", num)
+    } else {
+        format!("{}_", processor_id)
+    };
+
+    let (temperature_c, power_w) = if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        let sensor_iface = "xyz.openbmc_project.Sensor.Value";
+
+        // Try reading a processor core temperature sensor
+        let temp = match client
+            .get_managed_objects(
+                "xyz.openbmc_project.Sensor",
+                "/xyz/openbmc_project/sensors",
+            )
+            .await
+        {
+            Ok(objects) => {
+                objects
+                    .iter()
+                    .filter(|(path, ifaces)| {
+                        path.contains("/sensors/temperature/")
+                            && path.contains(&sensor_prefix)
+                            && ifaces.contains_key(sensor_iface)
+                    })
+                    .filter_map(|(_, ifaces)| {
+                        ifaces.get(sensor_iface)?.get("Value")?.as_f64()
+                    })
+                    .next()
+            }
+            Err(_) => None,
+        };
+
+        // Try reading processor power consumption
+        let pwr = match client
+            .get_managed_objects(
+                "xyz.openbmc_project.Sensor",
+                "/xyz/openbmc_project/sensors",
+            )
+            .await
+        {
+            Ok(objects) => {
+                objects
+                    .iter()
+                    .filter(|(path, ifaces)| {
+                        path.contains("/sensors/power/")
+                            && path.contains(&sensor_prefix)
+                            && ifaces.contains_key(sensor_iface)
+                    })
+                    .filter_map(|(_, ifaces)| {
+                        ifaces.get(sensor_iface)?.get("Value")?.as_f64()
+                    })
+                    .next()
+            }
+            Err(_) => None,
+        };
+
+        (temp, pwr)
+    } else {
+        (None, None)
+    };
+
+    Ok(Json(json!({
+        "@odata.type": "#EnvironmentMetrics.v1_3_0.EnvironmentMetrics",
+        "@odata.id": format!(
+            "/redfish/v1/Systems/{}/Processors/{}/EnvironmentMetrics",
+            system_id, processor_id
+        ),
+        "Id": "EnvironmentMetrics",
+        "Name": "Processor Environment Metrics",
+        "TemperatureCelsius": temperature_c.map(|t| json!({
+            "DataSourceUri": format!(
+                "/redfish/v1/Chassis/chassis/Sensors/temperature_{}core",
+                sensor_prefix
+            ),
+            "Reading": t
+        })).unwrap_or(Value::Null),
+        "PowerWatts": power_w.map(|p| json!({
+            "DataSourceUri": format!(
+                "/redfish/v1/Chassis/chassis/Sensors/power_{}",
+                sensor_prefix
+            ),
+            "Reading": p
+        })).unwrap_or(Value::Null),
+        "Status": { "State": "Enabled", "Health": "OK" }
+    })))
+}
+
+// ---------------------------------------------------------------------------
+// PostCodes LogService
+// ---------------------------------------------------------------------------
+
+/// GET /redfish/v1/Systems/{system_id}/LogServices/PostCodes
+///
+/// Returns the PostCodes log service resource.
+///
+/// Reference: DMTF Redfish LogService schema v1.2.0
+/// Upstream: redfish-core/lib/systems_logservices_postcodes.hpp
+///
+/// On OpenBMC, POST codes are stored by `xyz.openbmc_project.State.Boot.PostCode`
+/// at `/xyz/openbmc_project/State/Boot/PostCode0`.
+pub async fn get_post_codes_log_service(
+    State(_state): State<Arc<AppState>>,
+    Path(system_id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!(
+        "GET /redfish/v1/Systems/{}/LogServices/PostCodes",
+        system_id
+    );
+    validate_system_id(&system_id)?;
+
+    Ok(Json(json!({
+        "@odata.type": "#LogService.v1_2_0.LogService",
+        "@odata.id": format!("/redfish/v1/Systems/{}/LogServices/PostCodes", system_id),
+        "Id": "PostCodes",
+        "Name": "POST Code Log Service",
+        "Description": "System POST Code Log Service",
+        "ServiceEnabled": true,
+        "LogEntryType": "OEM",
+        "OverWritePolicy": "WrapsWhenFull",
+        "DateTime": chrono::Utc::now().to_rfc3339(),
+        "DateTimeLocalOffset": "+00:00",
+        "Entries": {
+            "@odata.id": format!(
+                "/redfish/v1/Systems/{}/LogServices/PostCodes/Entries",
+                system_id
+            )
+        },
+        "Actions": {
+            "#LogService.ClearLog": {
+                "target": format!(
+                    "/redfish/v1/Systems/{}/LogServices/PostCodes/Actions/LogService.ClearLog",
+                    system_id
+                )
+            }
+        },
+        "Status": { "State": "Enabled", "Health": "OK" }
+    })))
+}
+
+/// GET /redfish/v1/Systems/{system_id}/LogServices/PostCodes/Entries
+///
+/// Returns recent POST codes from the OpenBMC PostCode service.
+///
+/// OpenBMC DBus:
+///   Service:   xyz.openbmc_project.State.Boot.PostCode
+///   Object:    /xyz/openbmc_project/State/Boot/PostCode0
+///   Method:    xyz.openbmc_project.State.Boot.PostCode.GetPostCodes
+///     args:    (uint16 bootIndex) — 1 = most recent boot
+pub async fn get_post_codes_entries(
+    State(state): State<Arc<AppState>>,
+    Path(system_id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!(
+        "GET /redfish/v1/Systems/{}/LogServices/PostCodes/Entries",
+        system_id
+    );
+    validate_system_id(&system_id)?;
+
+    let members: Vec<Value> = if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        // Call GetPostCodes(1) to get the most recent boot's post codes
+        let postcodes_arg = serde_json::json!(1u16);
+        match client
+            .call_method(
+                "xyz.openbmc_project.State.Boot.PostCode",
+                "/xyz/openbmc_project/State/Boot/PostCode0",
+                "xyz.openbmc_project.State.Boot.PostCode",
+                "GetPostCodes",
+                Some(&postcodes_arg),
+            )
+            .await
+        {
+            Ok(result) => {
+                // Result is an array of (uint64 code, uint64 timestamp_us)
+                if let Some(codes) = result.as_array() {
+                    codes
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(idx, entry)| {
+                            let code = entry.as_array()
+                                .and_then(|a| a.first())
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0);
+                            let ts_us = entry.as_array()
+                                .and_then(|a| a.get(1))
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0);
+                            let ts_ms = ts_us / 1000;
+                            let created = ms_epoch_to_rfc3339(ts_ms);
+                            let entry_id = format!("B1-{}", idx + 1);
+                            Some(json!({
+                                "@odata.type": "#LogEntry.v1_15_0.LogEntry",
+                                "@odata.id": format!(
+                                    "/redfish/v1/Systems/{}/LogServices/PostCodes/Entries/{}",
+                                    system_id, entry_id
+                                ),
+                                "Id": entry_id,
+                                "Name": format!("POST Code {}", idx + 1),
+                                "EntryType": "OEM",
+                                "OemRecordFormat": "OpenBMC POST Codes",
+                                "Created": created,
+                                "Message": format!("POST Code 0x{:08X}", code),
+                                "MessageArgs": [format!("0x{:08X}", code)]
+                            }))
+                        })
+                        .collect()
+                } else {
+                    vec![]
+                }
+            }
+            Err(e) => {
+                warn!("Failed to read POST codes from DBus: {}", e);
+                vec![]
+            }
+        }
+    } else {
+        vec![]
+    };
+
+    Ok(Json(json!({
+        "@odata.type": "#LogEntryCollection.LogEntryCollection",
+        "@odata.id": format!(
+            "/redfish/v1/Systems/{}/LogServices/PostCodes/Entries",
+            system_id
+        ),
+        "Name": "POST Code Log Entries",
+        "Description": "Collection of system POST code log entries",
+        "Members@odata.count": members.len(),
+        "Members": members
+    })))
+}
+
+// ---------------------------------------------------------------------------
+// HostLogger LogService
+// ---------------------------------------------------------------------------
+
+/// GET /redfish/v1/Systems/{system_id}/LogServices/HostLogger
+///
+/// Returns the HostLogger log service resource.
+///
+/// Reference: DMTF Redfish LogService schema v1.4.0
+/// Upstream: redfish-core/lib/systems_logservices_hostlogger.hpp
+///
+/// On OpenBMC, host console output is captured by `obmc-console` and may
+/// be accessible via `xyz.openbmc_project.State.Boot.PostCode` or a journal
+/// log service.  This endpoint exposes the log service descriptor so clients
+/// can discover the entries endpoint.
+pub async fn get_host_logger_log_service(
+    State(_state): State<Arc<AppState>>,
+    Path(system_id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!(
+        "GET /redfish/v1/Systems/{}/LogServices/HostLogger",
+        system_id
+    );
+    validate_system_id(&system_id)?;
+
+    Ok(Json(json!({
+        "@odata.type": "#LogService.v1_4_0.LogService",
+        "@odata.id": format!("/redfish/v1/Systems/{}/LogServices/HostLogger", system_id),
+        "Id": "HostLogger",
+        "Name": "Host Logger",
+        "Description": "Host Console Output Log",
+        "ServiceEnabled": true,
+        "LogEntryType": "Oem",
+        "OverWritePolicy": "WrapsWhenFull",
+        "DateTime": chrono::Utc::now().to_rfc3339(),
+        "DateTimeLocalOffset": "+00:00",
+        "Entries": {
+            "@odata.id": format!(
+                "/redfish/v1/Systems/{}/LogServices/HostLogger/Entries",
+                system_id
+            )
+        },
+        "Actions": {
+            "#LogService.ClearLog": {
+                "target": format!(
+                    "/redfish/v1/Systems/{}/LogServices/HostLogger/Actions/LogService.ClearLog",
+                    system_id
+                )
+            }
+        },
+        "Status": { "State": "Enabled", "Health": "OK" }
+    })))
+}
+
+/// GET /redfish/v1/Systems/{system_id}/LogServices/HostLogger/Entries
+///
+/// Returns host console log entries captured by obmc-console.
+///
+/// On OpenBMC, the host console ring buffer is accessible as a file at
+/// `/var/log/obmc-console.log` (or via a rotating log in `/run/`).
+/// This implementation reads raw lines and wraps each line as a Redfish
+/// log entry.  Falls back to an empty collection when the file is absent.
+pub async fn get_host_logger_entries(
+    State(_state): State<Arc<AppState>>,
+    Path(system_id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!(
+        "GET /redfish/v1/Systems/{}/LogServices/HostLogger/Entries",
+        system_id
+    );
+    validate_system_id(&system_id)?;
+
+    // On a real BMC, read the obmc-console ring log.
+    // On QEMU/test we fall through to an empty collection gracefully.
+    let members: Vec<Value> = {
+        let log_paths = [
+            "/var/log/obmc-console.log",
+            "/run/obmc-console/obmc-console.log",
+        ];
+        let mut lines: Vec<String> = vec![];
+        for path in &log_paths {
+            if let Ok(content) = std::fs::read_to_string(path) {
+                lines = content
+                    .lines()
+                    .rev()
+                    .take(100) // cap at 100 most-recent lines
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
+                break;
+            }
+        }
+        lines
+            .into_iter()
+            .enumerate()
+            .map(|(idx, line)| {
+                let entry_id = (idx + 1).to_string();
+                json!({
+                    "@odata.type": "#LogEntry.v1_15_0.LogEntry",
+                    "@odata.id": format!(
+                        "/redfish/v1/Systems/{}/LogServices/HostLogger/Entries/{}",
+                        system_id, entry_id
+                    ),
+                    "Id": entry_id,
+                    "Name": format!("Host Logger Entry {}", entry_id),
+                    "EntryType": "Oem",
+                    "OemRecordFormat": "OpenBMC HostLogger",
+                    "Message": line
+                })
+            })
+            .collect()
+    };
+
+    Ok(Json(json!({
+        "@odata.type": "#LogEntryCollection.LogEntryCollection",
+        "@odata.id": format!(
+            "/redfish/v1/Systems/{}/LogServices/HostLogger/Entries",
+            system_id
+        ),
+        "Name": "Host Logger Entries",
+        "Description": "Collection of host console log entries",
+        "Members@odata.count": members.len(),
+        "Members": members
+    })))
 }

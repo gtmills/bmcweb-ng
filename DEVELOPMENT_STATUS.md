@@ -3,7 +3,7 @@
 ## Overview
 This document tracks the development progress of bmcweb-ng, a Rust rewrite of the OpenBMC bmcweb server.
 
-**Last Updated:** 2026-07-11
+**Last Updated:** 2026-07-14
 
 ## Project Structure
 
@@ -23,9 +23,9 @@ bmcweb-ng/
 │   │   ├── redfish/
 │   │   │   ├── mod.rs           ✅ Redfish router (full route table)
 │   │   │   ├── service_root.rs  ✅ ServiceRoot (v1.17.0 / v1.15.0 type)
-│   │   │   ├── systems.rs       ✅ Systems + sub-resources (Processors, Memory, etc.)
-│   │   │   ├── chassis.rs       ✅ Chassis + Power/Thermal/Sensors/NetworkAdapters
-│   │   │   ├── managers.rs      ✅ Managers + NetworkProtocol/EthernetInterfaces/LogServices
+│   │   │   ├── systems.rs       ✅ Systems + Bios + Processors/EnvironmentMetrics + Memory + Storage + LogServices (EventLog/PostCodes/HostLogger)
+│   │   │   ├── chassis.rs       ✅ Chassis + Power/PowerSubsystem + Thermal/ThermalSubsystem/Fans + Sensors/NetworkAdapters + Cables
+│   │   │   ├── managers.rs      ✅ Managers + NetworkProtocol/EthernetInterfaces/LogServices + ManagerDiagnosticData
 │   │   │   ├── sessions.rs      ✅ SessionService + Sessions (full login flow)
 │   │   │   ├── accounts.rs      ✅ AccountService + Accounts + Roles
 │   │   │   ├── event_service.rs      ✅ EventService + Subscriptions + SubmitTestEvent + SSE
@@ -193,6 +193,52 @@ bmcweb-ng/
    - Privilege infrastructure in place; session role populated at login
    - Per-route `check_privilege()` calls can now be added trivially
 
+### ✅ Completed July 2026 — Upstream Sync Round 1
+
+1. **BIOS endpoint** (`systems.rs`) — `GET /redfish/v1/Systems/{id}/Bios` + `POST .../Bios.ResetBios`
+   - Reads host firmware version from DBus (`host_active` software object, falls back to `.Host` purpose scan)
+   - Maps to upstream `redfish-core/lib/bios.hpp`
+
+2. **Processor EnvironmentMetrics** (`systems.rs`) — `GET /Systems/{id}/Processors/{id}/EnvironmentMetrics`
+   - Reads per-CPU temperature and power sensors from DBus sensor tree using `pN_` prefix convention
+   - Maps to upstream `redfish-core/lib/environment_metrics.hpp` (upstream commit 45b86809)
+
+3. **PowerSubsystem + PowerSupplies** (`chassis.rs`) — `GET /Chassis/{id}/PowerSubsystem` and `…/PowerSupplies`
+   - Modern replacement for the legacy Power resource; enumerates PSUs via `Item.PowerSupply`
+   - Maps to upstream `redfish-core/lib/power_subsystem.hpp`
+
+4. **ThermalSubsystem + Fans** (`chassis.rs`) — `GET /Chassis/{id}/ThermalSubsystem`, `…/Fans`, `…/Fans/{id}`
+   - Modern replacement for the legacy Thermal resource; enumerates fans via `fan_tach`/`fan` sensor paths
+   - Fan instance reads RPM + alarm bits from DBus
+   - Maps to upstream `redfish-core/lib/thermal_subsystem.hpp`, `fan.hpp`
+
+5. **ManagerDiagnosticData** (`managers.rs`) — `GET /Managers/{id}/ManagerDiagnosticData`
+   - Reports BMC memory statistics (FreeKiB/TotalKiB) from `/proc/meminfo`
+   - Reports system uptime from `/proc/uptime` as ISO 8601 duration
+   - Maps to upstream `redfish-core/lib/manager_diagnostic_data.hpp`
+
+6. **PostCodes LogService** (`systems.rs`) — `GET /Systems/{id}/LogServices/PostCodes` + `…/Entries`
+   - Calls `xyz.openbmc_project.State.Boot.PostCode.GetPostCodes(1)` via DBus
+   - Returns POST code entries with hex-formatted code and timestamp
+   - Maps to upstream `redfish-core/lib/systems_logservices_postcodes.hpp`
+
+7. **HostLogger LogService** (`systems.rs`) — `GET /Systems/{id}/LogServices/HostLogger` + `…/Entries`
+   - Reads `/var/log/obmc-console.log` (or `/run/obmc-console/obmc-console.log`)
+   - Returns up to 100 most-recent lines as Redfish log entries
+   - Maps to upstream `redfish-core/lib/systems_logservices_hostlogger.hpp`
+
+8. **PCIe device instance DBus wiring** (`systems.rs`) — `GET /Systems/{id}/PCIeDevices/{id}`
+   - Searches DBus inventory for `xyz.openbmc_project.Inventory.Item.PCIeDevice` objects
+   - Returns Manufacturer and DeviceType from DBus properties
+   - Maps to upstream `redfish-core/lib/pcie.hpp`
+
+9. **Cable resources** (`chassis.rs`) — `GET /redfish/v1/Cables` + `…/Cables/{id}`
+   - Enumerates `xyz.openbmc_project.Inventory.Item.Cable` objects from DBus inventory
+   - Returns CableTypeDescription, CableStatus, and LengthMeters
+   - Maps to upstream `redfish-core/lib/cable.hpp`
+
+10. **Updated LogServices collection** (`systems.rs`) — collection now includes EventLog, PostCodes, and HostLogger
+
 ### ❌ Not Yet Implemented
 
 1. **LDAP/Active Directory integration**
@@ -221,12 +267,20 @@ bmcweb-ng/
 |---------|--------|-----------|-------|
 | Redfish ServiceRoot | ✅ | ✅ | v1.17.0 compliant |
 | Redfish Systems | ✅ | ✅ | GET+PATCH, live PowerState/Boot/AssetTag/SerialNumber; Reset via DBus |
+| Redfish Systems/Bios | ✅ | ✅ | GET + ResetBios action; reads host firmware version from DBus |
 | Redfish Systems/Processors | ✅ | ✅ | Collection + individual instance from DBus inventory |
+| Redfish Systems/Processors/EnvironmentMetrics | ✅ | ✅ | Per-CPU temperature/power from sensor DBus tree |
 | Redfish Systems/Memory | ✅ | ✅ | Collection + individual instance from DBus inventory |
 | Redfish Systems/Storage | ✅ | ✅ | Collection enumerated from Inventory.Item.StorageController |
-| Redfish Systems/LogServices | ✅ | ✅ | EventLog instance + Entries collection + ClearLog |
+| Redfish Systems/LogServices | ✅ | ✅ | EventLog + PostCodes + HostLogger (3 services) |
+| Redfish Systems/PCIeDevices | ✅ | ✅ | Collection + instance from DBus inventory |
 | Redfish Chassis | ✅ | ✅ | GET+PATCH, live name/model/serial/LED; Power/Thermal/Sensors |
+| Redfish Chassis/PowerSubsystem | ✅ | ✅ | PowerSubsystem + PowerSupplies collection from DBus |
+| Redfish Chassis/ThermalSubsystem | ✅ | ✅ | ThermalSubsystem + Fans collection + Fan instance |
+| Redfish Chassis/Assembly | ✅ | ✅ | FRU assembly data from DBus inventory |
+| Redfish Cables | ✅ | ✅ | Collection + instance from xyz.openbmc_project.Inventory.Item.Cable |
 | Redfish Managers | ✅ | ✅ | GET+PATCH NIC; live FirmwareVersion/hostname/NTP; Reset via DBus |
+| Redfish Managers/ManagerDiagnosticData | ✅ | ✅ | Memory/uptime from /proc/meminfo and /proc/uptime |
 | SessionService | ✅ | ✅ | Full login flow, X-Auth-Token, role fetched from DBus |
 | AccountService | ✅ | ✅ | Full CRUD + PATCH lockout policy + PrivilegeMap |
 | EventService | ✅ | ✅ | Subscriptions + SubmitTestEvent + SSE stream + persisted PATCH settings + AtomicI64 timeout |
@@ -315,6 +369,18 @@ Measured on OpenBMC `qemuarm` (emulated Cortex-A15, 256 MB RAM). Binary:
 - [x] DBus REST API (/bus/, /list/, /xyz/*, /org/* GET + PUT)
 - [x] mTLS authentication (build_mtls_config + peer cert CN extraction + middleware arm)
 - [ ] LDAP integration
+
+### Phase 6: Upstream Sync (July 2026)
+- [x] BIOS endpoint (GET + ResetBios) from upstream bios.hpp
+- [x] Processor EnvironmentMetrics (temperature/power sensors) from upstream environment_metrics.hpp
+- [x] PowerSubsystem + PowerSupplies collection from upstream power_subsystem.hpp
+- [x] ThermalSubsystem + Fans collection + Fan instance from upstream thermal_subsystem.hpp / fan.hpp
+- [x] ManagerDiagnosticData (memory/uptime) from upstream manager_diagnostic_data.hpp
+- [x] Systems/LogServices/PostCodes from upstream systems_logservices_postcodes.hpp
+- [x] Systems/LogServices/HostLogger from upstream systems_logservices_hostlogger.hpp
+- [x] PCIe device instance DBus wiring from upstream pcie.hpp
+- [x] Cable collection + instance from upstream cable.hpp
+- [x] LogServices collection updated to expose EventLog + PostCodes + HostLogger
 
 ### Phase 5: Production Readiness
 - [ ] Comprehensive integration testing

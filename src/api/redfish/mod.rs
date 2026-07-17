@@ -31,10 +31,16 @@ pub fn router() -> Router<Arc<AppState>> {
                .patch(systems::patch_system))
         .route("/Systems/:system_id/Actions/ComputerSystem.Reset",
                post(systems::reset_system))
+        .route("/Systems/:system_id/Bios",
+               get(systems::get_bios))
+        .route("/Systems/:system_id/Bios/Actions/Bios.ResetBios",
+               post(systems::reset_bios))
         .route("/Systems/:system_id/Processors",
                get(systems::get_processors_collection))
         .route("/Systems/:system_id/Processors/:processor_id",
                get(systems::get_processor))
+        .route("/Systems/:system_id/Processors/:processor_id/EnvironmentMetrics",
+               get(systems::get_processor_environment_metrics))
         .route("/Systems/:system_id/Memory",
                get(systems::get_memory_collection))
         .route("/Systems/:system_id/Memory/:memory_id",
@@ -57,6 +63,14 @@ pub fn router() -> Router<Arc<AppState>> {
                post(systems::clear_event_log))
         .route("/Systems/:system_id/LogServices/EventLog/Actions/LogService.ClearLog/ActionInfo",
                get(systems::get_clear_event_log_action_info))
+        .route("/Systems/:system_id/LogServices/PostCodes",
+               get(systems::get_post_codes_log_service))
+        .route("/Systems/:system_id/LogServices/PostCodes/Entries",
+               get(systems::get_post_codes_entries))
+        .route("/Systems/:system_id/LogServices/HostLogger",
+               get(systems::get_host_logger_log_service))
+        .route("/Systems/:system_id/LogServices/HostLogger/Entries",
+               get(systems::get_host_logger_entries))
         .route("/Systems/:system_id/Actions/ComputerSystem.Reset/ActionInfo",
                get(systems::get_reset_action_info))
         .route("/Systems/:system_id/PCIeDevices",
@@ -75,6 +89,19 @@ pub fn router() -> Router<Arc<AppState>> {
                get(chassis::get_chassis_network_adapters))
         .route("/Chassis/:chassis_id/Assembly",
                get(chassis::get_chassis_assembly))
+        .route("/Chassis/:chassis_id/PowerSubsystem",
+               get(chassis::get_chassis_power_subsystem))
+        .route("/Chassis/:chassis_id/PowerSubsystem/PowerSupplies",
+               get(chassis::get_chassis_power_supplies))
+        .route("/Chassis/:chassis_id/ThermalSubsystem",
+               get(chassis::get_chassis_thermal_subsystem))
+        .route("/Chassis/:chassis_id/ThermalSubsystem/Fans",
+               get(chassis::get_chassis_fans))
+        .route("/Chassis/:chassis_id/ThermalSubsystem/Fans/:fan_id",
+               get(chassis::get_chassis_fan))
+        // Cables routes
+        .route("/Cables", get(chassis::get_cables_collection))
+        .route("/Cables/:cable_id", get(chassis::get_cable))
         // Managers routes
         .route("/Managers", get(managers::get_managers_collection))
         .route("/Managers/:manager_id", get(managers::get_manager))
@@ -98,6 +125,8 @@ pub fn router() -> Router<Arc<AppState>> {
                get(managers::get_manager_bmc_log_entry))
         .route("/Managers/:manager_id/LogServices/BMC/Actions/LogService.ClearLog",
                post(managers::clear_manager_bmc_log))
+        .route("/Managers/:manager_id/ManagerDiagnosticData",
+               get(managers::get_manager_diagnostic_data))
         .route("/Managers/:manager_id/NetworkProtocol/HTTPS/Certificates",
                get(certificate_service::get_https_certificates_collection))
         .route("/Managers/:manager_id/NetworkProtocol/HTTPS/Certificates/:cert_id",
