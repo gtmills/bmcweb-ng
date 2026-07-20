@@ -94,6 +94,70 @@ pub trait DbusClient: Send + Sync {
         destination: &str,
         path: &str,
     ) -> Result<HashMap<String, HashMap<String, HashMap<String, DbusValue>>>>;
+
+    /// Resolve which service(s) own a D-Bus object path.
+    ///
+    /// Calls `xyz.openbmc_project.ObjectMapper.GetObject` with the given
+    /// `path` and optional interface filter list.  Returns a map of
+    /// `service_name → [interface, ...]` for every service that implements
+    /// the object.
+    ///
+    /// # Arguments
+    /// * `path`       – D-Bus object path to resolve
+    /// * `interfaces` – If non-empty, only return services that implement at
+    ///                  least one of these interfaces.  Pass an empty slice to
+    ///                  match any service.
+    async fn get_object(
+        &self,
+        path: &str,
+        interfaces: &[&str],
+    ) -> Result<HashMap<String, Vec<String>>>;
+
+    /// Enumerate D-Bus objects that implement specified interfaces under a
+    /// subtree of the object hierarchy.
+    ///
+    /// Calls `xyz.openbmc_project.ObjectMapper.GetSubTree`.  Returns a map of
+    /// `object_path → { service_name → [interface, ...] }`.
+    ///
+    /// # Arguments
+    /// * `subtree`    – Root path to search under (e.g. `/xyz/openbmc_project`)
+    /// * `depth`      – How many path components below `subtree` to recurse.
+    ///                  `0` means unlimited depth.
+    /// * `interfaces` – Only return objects that implement at least one of
+    ///                  these interfaces.  Pass an empty slice to return all.
+    async fn get_subtree(
+        &self,
+        subtree: &str,
+        depth: i32,
+        interfaces: &[&str],
+    ) -> Result<HashMap<String, HashMap<String, Vec<String>>>>;
+
+    /// Follow a named association link and return associated object paths.
+    ///
+    /// OpenBMC models relationships between objects via the
+    /// `xyz.openbmc_project.Association.Definitions` interface.  The
+    /// ObjectMapper exposes resolved association endpoints at synthesised
+    /// paths of the form `<object_path>/<association_name>`.
+    ///
+    /// This method calls `xyz.openbmc_project.ObjectMapper.GetAssociatedSubTree`
+    /// to retrieve all objects reachable through the association.  The result
+    /// is a map of `object_path → { service_name → [interface, ...] }`,
+    /// identical in shape to [`get_subtree`].
+    ///
+    /// # Arguments
+    /// * `association_path` – The synthesised association endpoint, e.g.
+    ///   `/xyz/openbmc_project/inventory/system/chassis/sensors` (the chassis
+    ///   object path with `/sensors` appended for the "sensors" association).
+    /// * `subtree`          – Root path to restrict the search to.
+    /// * `depth`            – Recursion depth; `0` means unlimited.
+    /// * `interfaces`       – Interface filter; empty slice means no filter.
+    async fn get_associated(
+        &self,
+        association_path: &str,
+        subtree: &str,
+        depth: i32,
+        interfaces: &[&str],
+    ) -> Result<HashMap<String, HashMap<String, Vec<String>>>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -385,6 +449,108 @@ impl DbusClient for ZBusClient {
 
         Ok(result)
     }
+
+    async fn get_object(
+        &self,
+        path: &str,
+        interfaces: &[&str],
+    ) -> Result<HashMap<String, Vec<String>>> {
+        debug!("DBus GetObject: path={} interfaces={:?}", path, interfaces);
+
+        // ObjectMapper.GetObject(path: s, interfaces: as) →
+        //   dict<service_name: s, interfaces: as>
+        let ifaces: Vec<&str> = interfaces.to_vec();
+        let reply = self.connection
+            .call_method(
+                Some("xyz.openbmc_project.ObjectMapper"),
+                "/xyz/openbmc_project/object_mapper",
+                Some("xyz.openbmc_project.ObjectMapper"),
+                "GetObject",
+                &(path, ifaces.as_slice()),
+            )
+            .await
+            .with_context(|| format!("ObjectMapper.GetObject failed for path '{}'", path))?;
+
+        // Reply is a(sas) — array of (service, [interface, ...]) pairs
+        // which zvariant deserialises as a HashMap<String, Vec<String>>.
+        let result: HashMap<String, Vec<String>> = reply
+            .body()
+            .deserialize()
+            .context("Failed to deserialise GetObject reply")?;
+
+        Ok(result)
+    }
+
+    async fn get_subtree(
+        &self,
+        subtree: &str,
+        depth: i32,
+        interfaces: &[&str],
+    ) -> Result<HashMap<String, HashMap<String, Vec<String>>>> {
+        debug!(
+            "DBus GetSubTree: subtree={} depth={} interfaces={:?}",
+            subtree, depth, interfaces
+        );
+
+        // ObjectMapper.GetSubTree(subtree: s, depth: i, interfaces: as) →
+        //   dict<path: s, dict<service: s, interfaces: as>>
+        let ifaces: Vec<&str> = interfaces.to_vec();
+        let reply = self.connection
+            .call_method(
+                Some("xyz.openbmc_project.ObjectMapper"),
+                "/xyz/openbmc_project/object_mapper",
+                Some("xyz.openbmc_project.ObjectMapper"),
+                "GetSubTree",
+                &(subtree, depth, ifaces.as_slice()),
+            )
+            .await
+            .with_context(|| format!("ObjectMapper.GetSubTree failed for subtree '{}'", subtree))?;
+
+        let result: HashMap<String, HashMap<String, Vec<String>>> = reply
+            .body()
+            .deserialize()
+            .context("Failed to deserialise GetSubTree reply")?;
+
+        Ok(result)
+    }
+
+    async fn get_associated(
+        &self,
+        association_path: &str,
+        subtree: &str,
+        depth: i32,
+        interfaces: &[&str],
+    ) -> Result<HashMap<String, HashMap<String, Vec<String>>>> {
+        debug!(
+            "DBus GetAssociatedSubTree: association_path={} subtree={} depth={} interfaces={:?}",
+            association_path, subtree, depth, interfaces
+        );
+
+        // ObjectMapper.GetAssociatedSubTree(
+        //   association_path: s, subtree: s, depth: i, interfaces: as
+        // ) → dict<path: s, dict<service: s, interfaces: as>>
+        let ifaces: Vec<&str> = interfaces.to_vec();
+        let reply = self.connection
+            .call_method(
+                Some("xyz.openbmc_project.ObjectMapper"),
+                "/xyz/openbmc_project/object_mapper",
+                Some("xyz.openbmc_project.ObjectMapper"),
+                "GetAssociatedSubTree",
+                &(association_path, subtree, depth, ifaces.as_slice()),
+            )
+            .await
+            .with_context(|| format!(
+                "ObjectMapper.GetAssociatedSubTree failed for association_path '{}'",
+                association_path
+            ))?;
+
+        let result: HashMap<String, HashMap<String, Vec<String>>> = reply
+            .body()
+            .deserialize()
+            .context("Failed to deserialise GetAssociatedSubTree reply")?;
+
+        Ok(result)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -562,6 +728,10 @@ fn json_to_zvariant(value: &Value) -> Result<zbus::zvariant::Value<'_>> {
 #[derive(Default, Clone)]
 pub struct MockDbusClient {
     properties: Arc<RwLock<HashMap<String, DbusValue>>>,
+    /// Stores GetObject results keyed by object path.
+    objects: Arc<RwLock<HashMap<String, HashMap<String, Vec<String>>>>>,
+    /// Stores GetSubTree results keyed by subtree path.
+    subtrees: Arc<RwLock<HashMap<String, HashMap<String, HashMap<String, Vec<String>>>>>>,
 }
 
 impl MockDbusClient {
@@ -576,6 +746,26 @@ impl MockDbusClient {
         self.properties.write().unwrap().insert(key, value);
     }
 
+
+    /// Pre-populate the result returned by [`get_object`] for `path`.
+    ///
+    /// `service_ifaces` maps service name → list of interfaces, e.g.
+    /// `[("xyz.openbmc_project.Inventory.Manager", vec!["xyz.openbmc_project.Inventory.Item"])]`.
+    pub fn set_mock_object(&self, path: &str, service_ifaces: HashMap<String, Vec<String>>) {
+        self.objects.write().unwrap().insert(path.to_string(), service_ifaces);
+    }
+
+    /// Pre-populate the result returned by [`get_subtree`] and
+    /// [`get_associated`] for a given subtree/association path.
+    ///
+    /// `tree` maps object path → service → interfaces.
+    pub fn set_mock_subtree(
+        &self,
+        subtree: &str,
+        tree: HashMap<String, HashMap<String, Vec<String>>>,
+    ) {
+        self.subtrees.write().unwrap().insert(subtree.to_string(), tree);
+    }
 }
 
 fn mock_key(path: &str, interface: &str, property: &str) -> String {
@@ -652,6 +842,52 @@ impl DbusClient for MockDbusClient {
     ) -> Result<HashMap<String, HashMap<String, HashMap<String, DbusValue>>>> {
         // Return an empty map by default; callers can pre-populate via set_mock_property.
         Ok(HashMap::new())
+    }
+
+    async fn get_object(
+        &self,
+        path: &str,
+        _interfaces: &[&str],
+    ) -> Result<HashMap<String, Vec<String>>> {
+        self.objects
+            .read()
+            .unwrap()
+            .get(path)
+            .cloned()
+            .ok_or_else(|| anyhow!("Mock GetObject not found for path: {}", path))
+    }
+
+    async fn get_subtree(
+        &self,
+        subtree: &str,
+        _depth: i32,
+        _interfaces: &[&str],
+    ) -> Result<HashMap<String, HashMap<String, Vec<String>>>> {
+        Ok(self
+            .subtrees
+            .read()
+            .unwrap()
+            .get(subtree)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    async fn get_associated(
+        &self,
+        association_path: &str,
+        _subtree: &str,
+        _depth: i32,
+        _interfaces: &[&str],
+    ) -> Result<HashMap<String, HashMap<String, Vec<String>>>> {
+        // Association endpoints are stored in the same subtrees map, keyed by
+        // the association path (e.g. "/chassis/sensors").
+        Ok(self
+            .subtrees
+            .read()
+            .unwrap()
+            .get(association_path)
+            .cloned()
+            .unwrap_or_default())
     }
 }
 
@@ -758,5 +994,206 @@ mod tests {
     #[test]
     fn test_json_to_zvariant_object_errors() {
         assert!(json_to_zvariant(&json!({"key": "value"})).is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // get_object
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_mock_get_object_found() {
+        let mock = MockDbusClient::new();
+        let mut svc_map = HashMap::new();
+        svc_map.insert(
+            "xyz.openbmc_project.Inventory.Manager".to_string(),
+            vec!["xyz.openbmc_project.Inventory.Item.Cpu".to_string()],
+        );
+        mock.set_mock_object("/xyz/openbmc_project/inventory/cpu0", svc_map.clone());
+
+        let result = mock
+            .get_object("/xyz/openbmc_project/inventory/cpu0", &[])
+            .await
+            .unwrap();
+
+        assert_eq!(result, svc_map);
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_object_not_found() {
+        let mock = MockDbusClient::new();
+        let result = mock
+            .get_object("/xyz/openbmc_project/inventory/missing", &[])
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_object_multiple_services() {
+        let mock = MockDbusClient::new();
+        let mut svc_map = HashMap::new();
+        svc_map.insert(
+            "xyz.openbmc_project.Inventory.Manager".to_string(),
+            vec!["xyz.openbmc_project.Inventory.Item".to_string()],
+        );
+        svc_map.insert(
+            "xyz.openbmc_project.Sensor.Manager".to_string(),
+            vec!["xyz.openbmc_project.Sensor.Value".to_string()],
+        );
+        mock.set_mock_object("/xyz/openbmc_project/inventory/sensor0", svc_map.clone());
+
+        let result = mock
+            .get_object("/xyz/openbmc_project/inventory/sensor0", &["xyz.openbmc_project.Sensor.Value"])
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert!(result.contains_key("xyz.openbmc_project.Inventory.Manager"));
+        assert!(result.contains_key("xyz.openbmc_project.Sensor.Manager"));
+    }
+
+    // -----------------------------------------------------------------------
+    // get_subtree
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_mock_get_subtree_found() {
+        let mock = MockDbusClient::new();
+        let mut tree: HashMap<String, HashMap<String, Vec<String>>> = HashMap::new();
+        let mut svc = HashMap::new();
+        svc.insert(
+            "xyz.openbmc_project.Inventory.Manager".to_string(),
+            vec!["xyz.openbmc_project.Inventory.Item.Drive".to_string()],
+        );
+        tree.insert("/xyz/openbmc_project/inventory/drive0".to_string(), svc);
+        mock.set_mock_subtree("/xyz/openbmc_project/inventory", tree.clone());
+
+        let result = mock
+            .get_subtree(
+                "/xyz/openbmc_project/inventory",
+                0,
+                &["xyz.openbmc_project.Inventory.Item.Drive"],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert!(result.contains_key("/xyz/openbmc_project/inventory/drive0"));
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_subtree_empty_when_not_configured() {
+        let mock = MockDbusClient::new();
+        let result = mock
+            .get_subtree("/xyz/openbmc_project/inventory", 0, &[])
+            .await
+            .unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_subtree_multiple_objects() {
+        let mock = MockDbusClient::new();
+        let mut tree: HashMap<String, HashMap<String, Vec<String>>> = HashMap::new();
+        for i in 0..3 {
+            let mut svc = HashMap::new();
+            svc.insert(
+                "xyz.openbmc_project.Inventory.Manager".to_string(),
+                vec!["xyz.openbmc_project.Inventory.Item.Cpu".to_string()],
+            );
+            tree.insert(
+                format!("/xyz/openbmc_project/inventory/cpu{}", i),
+                svc,
+            );
+        }
+        mock.set_mock_subtree("/xyz/openbmc_project/inventory", tree);
+
+        let result = mock
+            .get_subtree("/xyz/openbmc_project/inventory", 0, &[])
+            .await
+            .unwrap();
+        assert_eq!(result.len(), 3);
+    }
+
+    // -----------------------------------------------------------------------
+    // get_associated
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_mock_get_associated_found() {
+        let mock = MockDbusClient::new();
+        let mut tree: HashMap<String, HashMap<String, Vec<String>>> = HashMap::new();
+        let mut svc = HashMap::new();
+        svc.insert(
+            "xyz.openbmc_project.Sensor.Manager".to_string(),
+            vec!["xyz.openbmc_project.Sensor.Value".to_string()],
+        );
+        tree.insert("/xyz/openbmc_project/sensors/temperature/cpu0".to_string(), svc);
+        // Association path is the chassis object path + "/sensors"
+        mock.set_mock_subtree(
+            "/xyz/openbmc_project/inventory/system/chassis/sensors",
+            tree.clone(),
+        );
+
+        let result = mock
+            .get_associated(
+                "/xyz/openbmc_project/inventory/system/chassis/sensors",
+                "/xyz/openbmc_project",
+                0,
+                &["xyz.openbmc_project.Sensor.Value"],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert!(result.contains_key("/xyz/openbmc_project/sensors/temperature/cpu0"));
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_associated_empty_when_not_configured() {
+        let mock = MockDbusClient::new();
+        let result = mock
+            .get_associated(
+                "/xyz/openbmc_project/inventory/system/chassis/powered_by",
+                "/xyz/openbmc_project",
+                0,
+                &[],
+            )
+            .await
+            .unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_mock_get_associated_independent_of_subtree_param() {
+        // get_associated looks up by association_path, not subtree arg — verify
+        // two different association names on the same object are independent.
+        let mock = MockDbusClient::new();
+        let base = "/xyz/openbmc_project/inventory/system/chassis";
+
+        let mut sensors_tree: HashMap<String, HashMap<String, Vec<String>>> = HashMap::new();
+        let mut s1 = HashMap::new();
+        s1.insert("svc.Sensor".to_string(), vec!["iface.Sensor".to_string()]);
+        sensors_tree.insert("/sensors/temp0".to_string(), s1);
+        mock.set_mock_subtree(&format!("{}/sensors", base), sensors_tree);
+
+        let mut fans_tree: HashMap<String, HashMap<String, Vec<String>>> = HashMap::new();
+        let mut s2 = HashMap::new();
+        s2.insert("svc.Fan".to_string(), vec!["iface.Fan".to_string()]);
+        fans_tree.insert("/sensors/fan0".to_string(), s2);
+        mock.set_mock_subtree(&format!("{}/fans", base), fans_tree);
+
+        let sensors = mock
+            .get_associated(&format!("{}/sensors", base), base, 0, &[])
+            .await
+            .unwrap();
+        let fans = mock
+            .get_associated(&format!("{}/fans", base), base, 0, &[])
+            .await
+            .unwrap();
+
+        assert_eq!(sensors.len(), 1);
+        assert!(sensors.contains_key("/sensors/temp0"));
+        assert_eq!(fans.len(), 1);
+        assert!(fans.contains_key("/sensors/fan0"));
     }
 }
