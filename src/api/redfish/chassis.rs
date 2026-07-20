@@ -537,6 +537,51 @@ pub async fn get_chassis_thermal(
 /// Returns the SensorCollection for this chassis.  On OpenBMC every sensor
 /// object under `/xyz/openbmc_project/sensors/` with a `Sensor.Value` interface
 /// is enumerated here.
+async fn fetch_chassis_sensors(
+    client: &dyn DbusClient,
+    chassis_id: &str,
+) -> Vec<Value> {
+    let association_path = format!(
+        "/xyz/openbmc_project/inventory/system/{}/all_sensors",
+        chassis_id
+    );
+    match client
+        .get_associated(
+            &association_path,
+            "/xyz/openbmc_project/sensors",
+            0,
+            &["xyz.openbmc_project.Sensor.Value"],
+        )
+        .await
+    {
+        Ok(objects) => {
+            let mut sensors: Vec<Value> = objects
+                .keys()
+                .map(|path| {
+                    let parts: Vec<&str> = path.rsplitn(3, '/').collect();
+                    let id = if parts.len() >= 2 {
+                        format!("{}_{}", parts[1], parts[0])
+                    } else {
+                        parts[0].to_string()
+                    };
+                    json!({
+                        "@odata.id": format!(
+                            "/redfish/v1/Chassis/{}/Sensors/{}",
+                            chassis_id, id
+                        )
+                    })
+                })
+                .collect();
+            sensors.sort_by_key(|v| v["@odata.id"].as_str().unwrap_or("").to_string());
+            sensors
+        }
+        Err(e) => {
+            warn!("Failed to enumerate sensors via association for chassis '{}': {}", chassis_id, e);
+            vec![]
+        }
+    }
+}
+
 pub async fn get_chassis_sensors(
     State(state): State<Arc<AppState>>,
     Path(chassis_id): Path<String>,
@@ -546,43 +591,7 @@ pub async fn get_chassis_sensors(
 
     let members: Vec<Value> = if let Some(conn) = state.dbus_connection.as_deref() {
         let client = ZBusClient::from_connection(conn.clone());
-        match client
-            .get_managed_objects(
-                "xyz.openbmc_project.Sensor",
-                "/xyz/openbmc_project/sensors",
-            )
-            .await
-        {
-            Ok(objects) => {
-                let sensor_iface = "xyz.openbmc_project.Sensor.Value";
-                let mut sensors: Vec<Value> = objects
-                    .iter()
-                    .filter(|(_, ifaces)| ifaces.contains_key(sensor_iface))
-                    .map(|(path, _)| {
-                        // Build a stable member ID from the last two path segments
-                        // e.g. /xyz/.../sensors/temperature/ambient → temperature_ambient
-                        let parts: Vec<&str> = path.rsplitn(3, '/').collect();
-                        let id = if parts.len() >= 2 {
-                            format!("{}_{}", parts[1], parts[0])
-                        } else {
-                            parts[0].to_string()
-                        };
-                        json!({
-                            "@odata.id": format!(
-                                "/redfish/v1/Chassis/{}/Sensors/{}",
-                                chassis_id, id
-                            )
-                        })
-                    })
-                    .collect();
-                sensors.sort_by_key(|v| v["@odata.id"].as_str().unwrap_or("").to_string());
-                sensors
-            }
-            Err(e) => {
-                warn!("Failed to enumerate sensors from DBus: {}", e);
-                vec![]
-            }
-        }
+        fetch_chassis_sensors(&client, &chassis_id).await
     } else {
         vec![]
     };
@@ -1001,6 +1010,41 @@ mod tests {
         assert!(result.is_ok());
         let json = result.unwrap().0;
         assert_eq!(json["Members@odata.count"], 0);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_chassis_sensors_via_association() {
+        use crate::dbus::MockDbusClient;
+        use std::collections::HashMap;
+
+        let mock = MockDbusClient::new();
+
+        let mut tree: HashMap<String, HashMap<String, Vec<String>>> = HashMap::new();
+        for name in &["ambient", "cpu0"] {
+            let mut svc = HashMap::new();
+            svc.insert(
+                "xyz.openbmc_project.Sensor.Manager".to_string(),
+                vec!["xyz.openbmc_project.Sensor.Value".to_string()],
+            );
+            tree.insert(
+                format!("/xyz/openbmc_project/sensors/temperature/{}", name),
+                svc,
+            );
+        }
+        mock.set_mock_subtree(
+            "/xyz/openbmc_project/inventory/system/chassis/all_sensors",
+            tree,
+        );
+
+        let members = fetch_chassis_sensors(&mock, "chassis").await;
+
+        assert_eq!(members.len(), 2);
+        let ids: Vec<&str> = members
+            .iter()
+            .map(|v| v["@odata.id"].as_str().unwrap())
+            .collect();
+        assert!(ids.contains(&"/redfish/v1/Chassis/chassis/Sensors/temperature_ambient"));
+        assert!(ids.contains(&"/redfish/v1/Chassis/chassis/Sensors/temperature_cpu0"));
     }
 
     #[tokio::test]
