@@ -298,10 +298,20 @@ pub async fn get_network_protocol(
 ///
 /// Updates HostName and/or NTP server list via DBus.
 ///
-/// OpenBMC DBus target:
+/// OpenBMC DBus targets:
 ///   /xyz/openbmc_project/network/config
-///   interface: xyz.openbmc_project.Network.SystemConfiguration
-///   properties: HostName (string), NTPServers (array of strings)
+///     interface: xyz.openbmc_project.Network.SystemConfiguration
+///     properties: HostName (string), NTPServers (array of strings)
+///
+///   /xyz/openbmc_project/control/service/dropbear
+///     interface: xyz.openbmc_project.Control.Service.Attributes
+///     property: Running (bool) — SSH ProtocolEnabled
+///
+///   /xyz/openbmc_project/control/service/phosphor_2dipmi_2dnet
+///     interface: xyz.openbmc_project.Control.Service.Attributes
+///     property: Running (bool) — IPMI ProtocolEnabled
+///
+/// Upstream: redfish-core/lib/managers.hpp (commit 8f987662 — per-property error paths)
 pub async fn patch_network_protocol(
     State(state): State<Arc<AppState>>,
     Extension(session): Extension<UserSession>,
@@ -346,6 +356,47 @@ pub async fn patch_network_protocol(
                 {
                     Ok(()) => info!("NTP servers updated via DBus ({} servers)", server_list.len()),
                     Err(e) => warn!("Failed to set NTP servers via DBus: {}", e),
+                }
+            }
+        }
+
+        // Apply SSH ProtocolEnabled if provided via SSH.ProtocolEnabled
+        // Upstream: redfish-core/lib/managers.hpp handleProtocolEnabled() with
+        // per-property Redfish error path — SSH/ProtocolEnabled (commit 8f987662)
+        if let Some(ssh) = body.get("SSH") {
+            if let Some(enabled) = ssh.get("ProtocolEnabled").and_then(|v| v.as_bool()) {
+                match client
+                    .set_property(
+                        "/xyz/openbmc_project/control/service/dropbear",
+                        "xyz.openbmc_project.Control.Service.Attributes",
+                        "Running",
+                        serde_json::json!(enabled),
+                    )
+                    .await
+                {
+                    Ok(()) => info!("SSH ProtocolEnabled set to {} via DBus", enabled),
+                    // Not all systems have obmc-console-server; absence is not an error.
+                    Err(e) => warn!("Failed to set SSH/ProtocolEnabled via DBus (service may be absent): {}", e),
+                }
+            }
+        }
+
+        // Apply IPMI ProtocolEnabled if provided via IPMI.ProtocolEnabled
+        // Upstream: redfish-core/lib/managers.hpp handleProtocolEnabled() —
+        // IPMI/ProtocolEnabled (commit 8f987662 uses correct per-property path)
+        if let Some(ipmi) = body.get("IPMI") {
+            if let Some(enabled) = ipmi.get("ProtocolEnabled").and_then(|v| v.as_bool()) {
+                match client
+                    .set_property(
+                        "/xyz/openbmc_project/control/service/phosphor_2dipmi_2dnet",
+                        "xyz.openbmc_project.Control.Service.Attributes",
+                        "Running",
+                        serde_json::json!(enabled),
+                    )
+                    .await
+                {
+                    Ok(()) => info!("IPMI ProtocolEnabled set to {} via DBus", enabled),
+                    Err(e) => warn!("Failed to set IPMI/ProtocolEnabled via DBus: {}", e),
                 }
             }
         }

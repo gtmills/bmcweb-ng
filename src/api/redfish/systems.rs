@@ -1580,62 +1580,88 @@ pub async fn get_processor_environment_metrics(
         format!("{}_", processor_id)
     };
 
-    let (temperature_c, power_w) = if let Some(conn) = state.dbus_connection.as_deref() {
+    let (temperature_c, power_w, power_limit_w) = if let Some(conn) = state.dbus_connection.as_deref() {
         let client = ZBusClient::from_connection(conn.clone());
         let sensor_iface = "xyz.openbmc_project.Sensor.Value";
 
-        // Try reading a processor core temperature sensor
-        let temp = match client
+        // Fetch all sensor objects once and reuse for temp/power/limit lookups
+        let all_sensor_objects = client
             .get_managed_objects(
                 "xyz.openbmc_project.Sensor",
                 "/xyz/openbmc_project/sensors",
             )
             .await
-        {
-            Ok(objects) => {
-                objects
-                    .iter()
-                    .filter(|(path, ifaces)| {
-                        path.contains("/sensors/temperature/")
-                            && path.contains(&sensor_prefix)
-                            && ifaces.contains_key(sensor_iface)
-                    })
-                    .filter_map(|(_, ifaces)| {
-                        ifaces.get(sensor_iface)?.get("Value")?.as_f64()
-                    })
-                    .next()
-            }
-            Err(_) => None,
-        };
+            .unwrap_or_default();
+
+        // Try reading a processor core temperature sensor
+        let temp = all_sensor_objects
+            .iter()
+            .filter(|(path, ifaces)| {
+                path.contains("/sensors/temperature/")
+                    && path.contains(&sensor_prefix)
+                    && ifaces.contains_key(sensor_iface)
+            })
+            .filter_map(|(_, ifaces)| {
+                ifaces.get(sensor_iface)?.get("Value")?.as_f64()
+            })
+            .next();
 
         // Try reading processor power consumption
-        let pwr = match client
+        let pwr = all_sensor_objects
+            .iter()
+            .filter(|(path, ifaces)| {
+                path.contains("/sensors/power/")
+                    && path.contains(&sensor_prefix)
+                    && ifaces.contains_key(sensor_iface)
+            })
+            .filter_map(|(_, ifaces)| {
+                ifaces.get(sensor_iface)?.get("Value")?.as_f64()
+            })
+            .next();
+
+        // Try reading processor power limit (xyz.openbmc_project.Control.Power.Cap)
+        // OpenBMC exposes power caps at /xyz/openbmc_project/control/power/<id>
+        // or as a Control.Power.Cap interface on the processor inventory object.
+        // Upstream: redfish-core/lib/environment_metrics.hpp (commit ff90bece)
+        let control_iface = "xyz.openbmc_project.Control.Power.Cap";
+        let power_limit_set_point = if let Ok(ctrl_objects) = client
             .get_managed_objects(
-                "xyz.openbmc_project.Sensor",
-                "/xyz/openbmc_project/sensors",
+                "xyz.openbmc_project.Inventory.Manager",
+                "/xyz/openbmc_project",
             )
             .await
         {
-            Ok(objects) => {
-                objects
-                    .iter()
-                    .filter(|(path, ifaces)| {
-                        path.contains("/sensors/power/")
-                            && path.contains(&sensor_prefix)
-                            && ifaces.contains_key(sensor_iface)
-                    })
-                    .filter_map(|(_, ifaces)| {
-                        ifaces.get(sensor_iface)?.get("Value")?.as_f64()
-                    })
-                    .next()
-            }
-            Err(_) => None,
+            ctrl_objects
+                .iter()
+                .filter(|(path, ifaces)| {
+                    path.contains(&sensor_prefix)
+                        && ifaces.contains_key(control_iface)
+                })
+                .filter_map(|(_, ifaces)| {
+                    let props = ifaces.get(control_iface)?;
+                    let set_point = props.get("PowerCap").and_then(|v| v.as_f64());
+                    let min = props.get("MinPowerCapValue").and_then(|v| v.as_f64());
+                    let max = props.get("MaxPowerCapValue").and_then(|v| v.as_f64());
+                    set_point.map(|sp| (sp, min, max))
+                })
+                .next()
+        } else {
+            None
         };
 
-        (temp, pwr)
+        (temp, pwr, power_limit_set_point)
     } else {
-        (None, None)
+        (None, None, None)
     };
+
+    let power_limit_watts = power_limit_w.map(|(set_point, min, max)| {
+        json!({
+            "SetPoint": set_point,
+            "AllowableMin": min.unwrap_or(0.0),
+            "AllowableMax": max.unwrap_or(f64::MAX),
+            "ControlMode": if set_point > 0.0 { "Automatic" } else { "Disabled" }
+        })
+    });
 
     Ok(Json(json!({
         "@odata.type": "#EnvironmentMetrics.v1_3_0.EnvironmentMetrics",
@@ -1659,6 +1685,7 @@ pub async fn get_processor_environment_metrics(
             ),
             "Reading": p
         })).unwrap_or(Value::Null),
+        "PowerLimitWatts": power_limit_watts.unwrap_or(Value::Null),
         "Status": { "State": "Enabled", "Health": "OK" }
     })))
 }

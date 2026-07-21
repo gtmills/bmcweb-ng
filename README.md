@@ -21,15 +21,15 @@ The original bmcweb is a mature, production-ready C++ application. This rewrite 
 
 ### Key Features
 
-- ✅ **Redfish API** - Full DMTF Redfish specification compliance (ServiceRoot through TelemetryService)
+- ✅ **Redfish API** - Broad Redfish coverage from ServiceRoot through TelemetryService, plus OData, Fabrics, and Virtual Media routes
 - ✅ **Multiple Protocols** - HTTP/1.1, HTTP/2, HTTPS with TLS 1.3
 - ✅ **Authentication** - Basic auth with PAM, Session management, Token-based auth
-- ✅ **Event Service** - Event subscriptions and async notifications to external systems
+- ✅ **Event Service** - Event subscriptions, async notifications, SSE endpoint, and PATCH-configurable retry settings
 - ✅ **Task Service** - Long-running operation tracking and management
 - ✅ **Update Service** - Firmware update management and live DBus inventory
 - ✅ **DBus Integration** - Comprehensive async DBus wiring to OpenBMC services
-- ⚠️  **WebSocket Support** - Serial console fully working; KVM stub in place
-- ✅ **Performance** - ~5MB binary, <10MB memory (idle), <1s startup on real hardware
+- ✅ **WebSocket Support** - Serial console, KVM proxy, and Virtual Media/NBD UNIX-socket proxies
+- ✅ **Performance** - ~5MB binary, <10MB memory (idle), fast request latency on QEMU and real hardware
 - ✅ **Observability** - Structured logging, Prometheus metrics support
 
 ## Architecture
@@ -243,12 +243,12 @@ Measured on OpenBMC `qemuarm` (Cortex-A15, 256 MB RAM, 4 cores) — July 2026.
 ## Compatibility
 
 ### API Compatibility
-- **Redfish API**: 100% compatible with bmcweb
-- **DBus Interface**: Same DBus calls as bmcweb
-- **Configuration**: New TOML format (migration tool provided)
+- **Redfish API**: High parity with upstream bmcweb for the currently implemented route set
+- **DBus Interface**: Same DBus calls and object model intent as bmcweb for implemented resources
+- **Configuration**: New TOML format defined in [`config.toml`](config.toml)
 
 ### Migration from bmcweb
-See [docs/migration/from-bmcweb.md](docs/migration/from-bmcweb.md) for detailed migration guide.
+No standalone migration guide is checked into this repository yet. Use [`BUILDING.md`](BUILDING.md), [`ARCHITECTURE.md`](ARCHITECTURE.md), and [`DEVELOPMENT_STATUS.md`](DEVELOPMENT_STATUS.md) for current setup and parity details.
 
 ## Contributing
 

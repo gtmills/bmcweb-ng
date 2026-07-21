@@ -178,6 +178,8 @@ impl EventPayload {
 /// them and GET immediately reflects the new values.
 #[derive(Debug, Clone)]
 pub struct EventServiceSettings {
+    /// Whether the event service is enabled.  Redfish default: true.
+    pub service_enabled: bool,
     /// Number of delivery retries before giving up.  Redfish default: 3.
     pub delivery_retry_attempts: u32,
     /// Seconds between delivery retries.  Redfish default: 60.
@@ -187,6 +189,7 @@ pub struct EventServiceSettings {
 impl Default for EventServiceSettings {
     fn default() -> Self {
         Self {
+            service_enabled: true,
             delivery_retry_attempts: 3,
             delivery_retry_interval_seconds: 60,
         }
@@ -219,12 +222,20 @@ impl EventService {
     }
 
     /// Update service settings.  Only `Some` values are applied.
+    ///
+    /// Includes `service_enabled` to persist `ServiceEnabled` from
+    /// `PATCH /redfish/v1/EventService`.
     pub fn update_settings(
         &self,
+        service_enabled: Option<bool>,
         delivery_retry_attempts: Option<u32>,
         delivery_retry_interval_seconds: Option<u32>,
     ) {
         let mut s = self.settings.write().unwrap();
+        if let Some(v) = service_enabled {
+            info!("EventService: ServiceEnabled updated to {}", v);
+            s.service_enabled = v;
+        }
         if let Some(v) = delivery_retry_attempts {
             info!("EventService: DeliveryRetryAttempts updated to {}", v);
             s.delivery_retry_attempts = v;

@@ -3,7 +3,7 @@
 ## Overview
 This document tracks the development progress of bmcweb-ng, a Rust rewrite of the OpenBMC bmcweb server.
 
-**Last Updated:** 2026-07-15 — v0.4.1
+**Last Updated:** 2026-07-21 — v0.4.1 + QEMU validation refresh
 
 ## Project Structure
 
@@ -378,8 +378,9 @@ Measured on OpenBMC `qemuarm` (emulated Cortex-A15, 256 MB RAM). Binary:
 | Concurrent 20 GETs | — | 20/20 ✅ | ✅ All successful |
 | Redfish routes (v0.4.0) | — | **60+** | ✅ All endpoints return valid JSON |
 | Unit tests (v0.4.0) | — | **149** | ✅ 0 failures |
-| Redfish routes (v0.4.1) | — | **120+** | ✅ All endpoints return valid JSON |
-| Unit tests (v0.4.1) | — | **157** | ✅ 0 failures |
+| Redfish routes (v0.4.1) | — | **120+** | ✅ Core smoke-tested in QEMU; broad route set present |
+| Unit tests (v0.4.1) | — | **157** | ⚠️ Windows host in this workspace lacks `link.exe`, so local `cargo test` could not be rerun here |
+| QEMU smoke checks (2026-07-21) | — | **17/17** | ✅ Injected `bmcweb-ng` release binary into OpenBMC QEMU and validated core Redfish routes |
 
 ## Development Roadmap
 

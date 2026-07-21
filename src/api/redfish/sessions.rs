@@ -64,20 +64,31 @@ async fn fetch_user_role(
         .await
     {
         Ok(info) => {
-            // Response is a dict; look for "UserGroups" key
+            // Response is a dict. Prefer UserGroups when present, but some
+            // systems only expose UserPrivilege.
             if let Some(groups) = info.get("UserGroups").and_then(|v| v.as_array()) {
                 for group in groups {
                     let role = match group.as_str().unwrap_or("") {
-                        "priv-admin"    => Some("Administrator"),
+                        "priv-admin" => Some("Administrator"),
                         "priv-operator" => Some("Operator"),
-                        "priv-user"     => Some("ReadOnly"),
+                        "priv-user" => Some("ReadOnly"),
                         "priv-noaccess" => Some("NoAccess"),
-                        _               => None,
+                        _ => None,
                     };
                     if let Some(r) = role {
                         return r.to_string();
                     }
                 }
+            }
+            if let Some(privilege) = info.get("UserPrivilege").and_then(|v| v.as_str()) {
+                return match privilege {
+                    "priv-admin" => "Administrator",
+                    "priv-operator" => "Operator",
+                    "priv-user" => "ReadOnly",
+                    "priv-noaccess" => "NoAccess",
+                    _ => "ReadOnly",
+                }
+                .to_string();
             }
             warn!("Could not determine role for user '{}' from GetUserInfo response", username);
             "ReadOnly".to_string()
@@ -159,29 +170,63 @@ pub async fn get_session_service(
 /// Updates `SessionTimeout`.  Valid range: 30–86400 seconds.
 /// The new value is persisted in the `SessionStore` and immediately reflected
 /// in subsequent GET calls and new session expiration calculations.
+///
+/// On out-of-range values, returns 400 with `PropertyValueOutOfRange` — not
+/// `PropertyValueNotInList` which is semantically incorrect for a bounded
+/// range.
+///
+/// Upstream: redfish-core/lib/redfish_sessions.hpp (commit 524de3de)
 pub async fn patch_session_service(
     State(state): State<Arc<AppState>>,
     Extension(session): Extension<UserSession>,
     JsonBody(body): JsonBody<PatchSessionServiceRequest>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     debug!("PATCH /redfish/v1/SessionService");
-    check_privilege(Some(&session), PRIVILEGE_PATCH)?;
+    check_privilege(Some(&session), PRIVILEGE_PATCH)
+        .map_err(|s| (s, Json(json!({"error": {"code": "Base.1.0.InsufficientPrivilege", "message": "Insufficient privileges"}}))))?;
 
     if let Some(timeout) = body.session_timeout {
         let session_store = state
             .session_store
             .as_ref()
-            .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+            .ok_or_else(|| (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": {"code": "Base.1.0.InternalError", "message": "Session store unavailable"}})),
+            ))?;
 
-        if let Err(e) = session_store.set_timeout_seconds(timeout as i64) {
-            warn!("PATCH SessionService rejected: {}", e);
-            return Err(StatusCode::BAD_REQUEST);
+        if session_store.set_timeout_seconds(timeout as i64).is_err() {
+            warn!("PATCH SessionService rejected: SessionTimeout {} out of range [30, 86400]", timeout);
+            // Use PropertyValueOutOfRange (not PropertyValueNotInList — the value
+            // is rejected because it exceeds bounds, not because it is absent from
+            // a discrete list).  Upstream fix: commit 524de3de.
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": {
+                        "code": "Base.1.0.PropertyValueOutOfRange",
+                        "message": format!(
+                            "The value {} for SessionTimeout is out of range [30, 86400].",
+                            timeout
+                        ),
+                        "@Message.ExtendedInfo": [{
+                            "@odata.type": "#Message.v1_1_1.Message",
+                            "MessageId": "Base.1.19.PropertyValueOutOfRange",
+                            "Message": format!(
+                                "The value {} for the property SessionTimeout is not in the allowable range of 30 to 86400.",
+                                timeout
+                            ),
+                            "MessageArgs": [timeout.to_string(), "SessionTimeout"]
+                        }]
+                    }
+                })),
+            ));
         }
 
         info!("SessionTimeout updated to {} seconds", timeout);
     }
 
     get_session_service(State(state)).await
+        .map_err(|s| (s, Json(json!({"error": {"code": "Base.1.0.InternalError", "message": "Failed to read session service"}}))))
 }
 
 /// GET /redfish/v1/SessionService/Sessions
@@ -459,5 +504,37 @@ mod tests {
         ).await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_patch_session_service_out_of_range_returns_property_value_out_of_range() {
+        use std::net::{IpAddr, Ipv4Addr};
+
+        let config = crate::config::Config::default();
+        // AppState::new already initialises the SessionStore from config
+        let state = Arc::new(crate::AppState::new(config));
+
+        let mut admin = UserSession::new(
+            "testadmin".to_string(),
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            SessionType::Token,
+            3600,
+        );
+        admin.set_role("Administrator".to_string());
+
+        // Value 10 is below the valid range 30-86400 → must return PropertyValueOutOfRange
+        let body = PatchSessionServiceRequest { session_timeout: Some(10) };
+        let result = patch_session_service(
+            State(state),
+            Extension(admin),
+            JsonBody(body),
+        ).await;
+        assert!(result.is_err());
+        let (status, json_body) = result.unwrap_err();
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            json_body.0["error"]["code"],
+            "Base.1.0.PropertyValueOutOfRange"
+        );
     }
 }
