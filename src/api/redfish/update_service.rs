@@ -201,8 +201,10 @@ async fn dbus_firmware_members(conn: &zbus::Connection) -> Vec<Value> {
                         "Host Firmware"
                     } else if purpose_raw.ends_with(".System") {
                         "System Firmware"
-                    } else {
+                    } else if purpose_raw.is_empty() {
                         "Firmware"
+                    } else {
+                        purpose_raw.rsplit('.').next().unwrap_or("Firmware")
                     };
                     let is_active = ifaces
                         .get(act_iface)

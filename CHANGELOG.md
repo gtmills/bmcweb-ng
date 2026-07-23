@@ -152,6 +152,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   headers pointing at the newly created resource, matching the existing session,
   telemetry, and task response patterns.
 
+- **UpdateService purpose fallback naming** (`src/api/redfish/update_service.rs`) —
+  firmware inventory now preserves the final enum segment of unknown
+  `Purpose` values as the display name fallback instead of collapsing all
+  non-BMC/Host/System entries to `Firmware`.
+
 - **`PasswordExpirationDays` PATCH** (`accounts.rs`) — `PATCH /AccountService/Accounts/{id}`
   now accepts `PasswordExpirationDays` (uint64). Writes `UserPasswordExpiry` via
   `set_property` on `xyz.openbmc_project.User.Attributes`.

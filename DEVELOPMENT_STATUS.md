@@ -113,6 +113,7 @@ bmcweb-ng/
    - Chassis sensor resources now include direct per-sensor GET handling, including frequency sensor type translation to `ReadingType: Frequency`
    - Processor resources now expose `FirmwareVersion` and `Location.PartLocation.ServiceLabel` when DBus metadata is present
    - Created Account and EventService subscription responses now include `Location` headers
+   - UpdateService firmware inventory now uses a purpose-derived fallback name instead of collapsing all unknown purposes to `Firmware`
    - TaskService + Tasks collection
    - UpdateService + FirmwareInventory + SimpleUpdate action (202 + Location)
 
