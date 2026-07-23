@@ -22,6 +22,7 @@
 //! - GET   /redfish/v1/Systems/{system_id}/LogServices/HostLogger[/Entries]
 //! - GET   /redfish/v1/Systems/{system_id}/Storage
 //! - GET   /redfish/v1/Systems/{system_id}/Storage/{storage_id}
+//! - GET   /redfish/v1/Systems/{system_id}/Storage/{storage_id}/Drives/{drive_id}
 //! - GET   /redfish/v1/Systems/{system_id}/EthernetInterfaces
 //! - GET   /redfish/v1/Systems/{system_id}/EthernetInterfaces/{nic_id}
 //! - GET   /redfish/v1/Systems/hypervisor   (IBM POWER hypervisor partition)
@@ -2298,7 +2299,7 @@ pub async fn get_host_logger_entries(
 }
 
 // ---------------------------------------------------------------------------
-// Memory device type translation (TODO 8)
+// Memory device type translation
 // ---------------------------------------------------------------------------
 
 /// Translate an OpenBMC `Inventory.Item.Dimm.DeviceType` enum string to the
@@ -2433,7 +2434,109 @@ pub async fn get_storage(
 }
 
 // ---------------------------------------------------------------------------
-// Hypervisor system (TODO 1)
+// Storage Drive instance (within a Storage resource)
+// ---------------------------------------------------------------------------
+
+/// GET /redfish/v1/Systems/{system_id}/Storage/{storage_id}/Drives/{drive_id}
+///
+/// Returns a single Drive resource under a Storage (controller) resource.
+///
+/// Reference: DMTF Redfish Drive schema v1.18.0
+/// Upstream: redfish-core/lib/storage.hpp (drive instance path)
+///
+/// On OpenBMC, drives are inventory objects with interface
+/// `xyz.openbmc_project.Inventory.Item.Drive`.  Asset data comes from
+/// `xyz.openbmc_project.Inventory.Decorator.Asset`.
+/// Block-device capacity is exposed via `xyz.openbmc_project.Inventory.Item.Drive.CapacityBytes`.
+pub async fn get_storage_drive(
+    State(state): State<Arc<AppState>>,
+    Path((system_id, storage_id, drive_id)): Path<(String, String, String)>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!(
+        "GET /redfish/v1/Systems/{}/Storage/{}/Drives/{}",
+        system_id, storage_id, drive_id
+    );
+    validate_system_id(&system_id)?;
+
+    let (manufacturer, model, serial, part_number, capacity_bytes, drive_type, protocol) =
+        if let Some(conn) = state.dbus_connection.as_deref() {
+            let client = ZBusClient::from_connection(conn.clone());
+            let objects = client
+                .get_managed_objects(
+                    "xyz.openbmc_project.Inventory.Manager",
+                    "/xyz/openbmc_project/inventory",
+                )
+                .await
+                .unwrap_or_default();
+
+            let drive_iface = "xyz.openbmc_project.Inventory.Item.Drive";
+            let found = objects
+                .iter()
+                .find(|(path, ifaces)| {
+                    ifaces.contains_key(drive_iface)
+                        && path.rsplit('/').next() == Some(drive_id.as_str())
+                });
+
+            match found {
+                Some((_, ifaces)) => {
+                    let asset_iface = "xyz.openbmc_project.Inventory.Decorator.Asset";
+                    let asset = ifaces.get(asset_iface);
+                    let drive = ifaces.get(drive_iface);
+
+                    let mfr = asset.and_then(|a| a.get("Manufacturer"))
+                        .and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let mdl = asset.and_then(|a| a.get("Model"))
+                        .and_then(|v| v.as_str()).unwrap_or("Unknown").to_string();
+                    let sn = asset.and_then(|a| a.get("SerialNumber"))
+                        .and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let pn = asset.and_then(|a| a.get("PartNumber"))
+                        .and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let cap = drive.and_then(|d| d.get("CapacityBytes"))
+                        .and_then(|v| v.as_u64()).unwrap_or(0);
+                    let dtype_raw = drive.and_then(|d| d.get("Type"))
+                        .and_then(|v| v.as_str()).unwrap_or("");
+                    let dtype = if dtype_raw.ends_with(".SSD") { "SSD" }
+                        else if dtype_raw.ends_with(".HDD") { "HDD" }
+                        else { "HDD" };
+                    let proto_raw = drive.and_then(|d| d.get("Protocol"))
+                        .and_then(|v| v.as_str()).unwrap_or("");
+                    let proto = if proto_raw.ends_with(".NVMe") { "NVMe" }
+                        else if proto_raw.ends_with(".SATA") { "SATA" }
+                        else if proto_raw.ends_with(".SAS") { "SAS" }
+                        else { "SATA" };
+                    (mfr, mdl, sn, pn, cap, dtype.to_string(), proto.to_string())
+                }
+                None => return Err(StatusCode::NOT_FOUND),
+            }
+        } else {
+            return Err(StatusCode::NOT_FOUND);
+        };
+
+    Ok(Json(json!({
+        "@odata.type": "#Drive.v1_18_0.Drive",
+        "@odata.id": format!(
+            "/redfish/v1/Systems/{}/Storage/{}/Drives/{}",
+            system_id, storage_id, drive_id
+        ),
+        "Id": drive_id,
+        "Name": drive_id,
+        "Description": "Drive",
+        "Manufacturer": manufacturer,
+        "Model": model,
+        "SerialNumber": serial,
+        "PartNumber": part_number,
+        "CapacityBytes": capacity_bytes,
+        "MediaType": drive_type,
+        "Protocol": protocol,
+        "Status": { "State": "Enabled", "Health": "OK" },
+        "Links": {
+            "Chassis": [{ "@odata.id": "/redfish/v1/Chassis/chassis" }]
+        }
+    })))
+}
+
+// ---------------------------------------------------------------------------
+// Hypervisor system
 // ---------------------------------------------------------------------------
 
 /// GET /redfish/v1/Systems/hypervisor

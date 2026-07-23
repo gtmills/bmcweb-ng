@@ -94,6 +94,8 @@ pub fn router() -> Router<Arc<AppState>> {
                get(systems::get_reset_action_info))
         .route("/Systems/:system_id/Storage/:storage_id",
                get(systems::get_storage))
+        .route("/Systems/:system_id/Storage/:storage_id/Drives/:drive_id",
+               get(systems::get_storage_drive))
         .route("/Systems/:system_id/PCIeDevices",
                get(systems::get_pcie_devices_collection))
         .route("/Systems/:system_id/PCIeDevices/:pcie_id",

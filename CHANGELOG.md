@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`GET /Systems/{id}/Storage/{id}/Drives/{drive_id}` instance endpoint** (`systems.rs`,
+  `redfish/mod.rs`) — New handler for Drive resources scoped under a Storage controller.
+  Looks up `xyz.openbmc_project.Inventory.Item.Drive` in DBus inventory; returns 404
+  when not found.  Includes `Manufacturer`, `Model`, `SerialNumber`, `PartNumber`,
+  `CapacityBytes`, `MediaType` (HDD/SSD), and `Protocol` (NVMe/SATA/SAS) mapped from
+  DBus enum strings.  Also removes residual stale `TODO 1` and `TODO 8` comment labels.
+  Maps to upstream `redfish-core/lib/storage.hpp`.
+
 - **`PATCH /AccountService` MinPasswordLength + MaxPasswordLength** (`accounts.rs`) —
   `PATCH /redfish/v1/AccountService` now accepts `MinPasswordLength` and
   `MaxPasswordLength` fields and writes them to `xyz.openbmc_project.User.Manager /
