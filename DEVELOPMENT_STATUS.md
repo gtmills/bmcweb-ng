@@ -107,6 +107,7 @@ bmcweb-ng/
    - AccountService + Accounts + Roles (four built-in Redfish roles); self-service account PATCH now permits password-only updates for the currently authenticated account while broader edits still require `ConfigureUsers`
    - EventService + Subscriptions + SubmitTestEvent action; PATCH settings persisted
    - Manager EthernetInterface PATCH now enforces `ConfigureComponents`, matching upstream privilege intent for interface mutation
+   - Manager NetworkProtocol now reflects SSH `ProtocolEnabled` from DBus when the dropbear service object is present, and still degrades cleanly when it is absent
    - TaskService + Tasks collection
    - UpdateService + FirmwareInventory + SimpleUpdate action (202 + Location)
 

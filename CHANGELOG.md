@@ -118,6 +118,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ConfigureComponents` instead of the generic manager PATCH privilege, matching
   upstream privilege registration.
 
+- **Manager NetworkProtocol SSH state** (`src/api/redfish/managers.rs`) —
+  `GET /Managers/{id}/NetworkProtocol` now reads `SSH.ProtocolEnabled` from the
+  dropbear `Running` property when available and continues to fall back to
+  enabled-by-default behavior when the backing DBus object is absent.
+
 - **`PasswordExpirationDays` PATCH** (`accounts.rs`) — `PATCH /AccountService/Accounts/{id}`
   now accepts `PasswordExpirationDays` (uint64). Writes `UserPasswordExpiry` via
   `set_property` on `xyz.openbmc_project.User.Attributes`.

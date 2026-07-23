@@ -226,8 +226,8 @@ pub async fn get_network_protocol(
     debug!("GET /redfish/v1/Managers/{}/NetworkProtocol", manager_id);
     validate_manager_id(&manager_id)?;
 
-    // Query hostname, NTP server list, and IPMI state from DBus
-    let (hostname, ntp_servers, ipmi_enabled) = if let Some(conn) = state.dbus_connection.as_deref() {
+    // Query hostname, NTP server list, and IPMI/SSH state from DBus
+    let (hostname, ntp_servers, ipmi_enabled, ssh_enabled) = if let Some(conn) = state.dbus_connection.as_deref() {
         let client = ZBusClient::from_connection(conn.clone());
 
         let hostname = client
@@ -265,9 +265,20 @@ pub async fn get_network_protocol(
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
 
-        (hostname, ntp_servers, ipmi_enabled)
+        let ssh_enabled = client
+            .get_property(
+                "/xyz/openbmc_project/control/service/dropbear",
+                "xyz.openbmc_project.Control.Service.Attributes",
+                "Running",
+            )
+            .await
+            .ok()
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+
+        (hostname, ntp_servers, ipmi_enabled, ssh_enabled)
     } else {
-        ("openbmc".to_string(), vec![], true)
+        ("openbmc".to_string(), vec![], true, true)
     };
 
     let fqdn = hostname.clone();
@@ -282,7 +293,7 @@ pub async fn get_network_protocol(
         "FQDN": fqdn,
         "HTTP": { "ProtocolEnabled": false, "Port": 80 },
         "HTTPS": { "ProtocolEnabled": true, "Port": 443 },
-        "SSH": { "ProtocolEnabled": true, "Port": 22 },
+        "SSH": { "ProtocolEnabled": ssh_enabled, "Port": 22 },
         "IPMI": { "ProtocolEnabled": ipmi_enabled, "Port": 623 },
         "NTP": {
             "ProtocolEnabled": true,
