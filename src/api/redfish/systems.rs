@@ -2119,7 +2119,7 @@ fn translate_memory_device_type(raw: &str) -> &'static str {
 }
 
 // ---------------------------------------------------------------------------
-// Storage instance (TODO 4)
+// Storage instance
 // ---------------------------------------------------------------------------
 
 /// GET /redfish/v1/Systems/{system_id}/Storage/{storage_id}

@@ -1686,7 +1686,7 @@ mod chassis_new_tests {
 }
 
 // ---------------------------------------------------------------------------
-// PowerSupply instance (TODO 2)
+// PowerSupply instance
 // ---------------------------------------------------------------------------
 
 /// GET /redfish/v1/Chassis/{chassis_id}/PowerSubsystem/PowerSupplies/{psu_id}

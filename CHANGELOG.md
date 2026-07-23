@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Remove misleading TODO labels from section headers** (`systems.rs`, `chassis.rs`,
+  `managers.rs`) — Phase-marker comments (`TODO 1` through `TODO 10`) on section
+  dividers were stale (all sections are fully implemented) and confusingly implied
+  unfinished work.  Replaced with plain descriptive section names.
+
 ---
 
 ## [0.4.1] - 2026-07-15

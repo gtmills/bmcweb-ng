@@ -1175,7 +1175,7 @@ pub async fn get_manager_journal_entries(
 
 
 // ---------------------------------------------------------------------------
-// Manager DBusEventLog LogService (TODO 7)
+// Manager DBusEventLog LogService
 // ---------------------------------------------------------------------------
 
 /// GET /redfish/v1/Managers/{manager_id}/LogServices/DBusEventLog
