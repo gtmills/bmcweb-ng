@@ -102,6 +102,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/control/service/phosphor_2dipmi_2dnet` object; falls back to `true` when
   the property is unavailable. Matches upstream commit `9352bdc8`.
 
+- **Account ConfigureSelf password PATCH** (`src/api/redfish/accounts.rs`) —
+  `PATCH /AccountService/Accounts/{id}` now permits callers without
+  `ConfigureUsers` to update only their own `Password`. Any other field, or any
+  patch to a different account, still returns `403 Forbidden`.
+
 - **`PasswordExpirationDays` PATCH** (`accounts.rs`) — `PATCH /AccountService/Accounts/{id}`
   now accepts `PasswordExpirationDays` (uint64). Writes `UserPasswordExpiry` via
   `set_property` on `xyz.openbmc_project.User.Attributes`.

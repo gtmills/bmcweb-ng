@@ -545,12 +545,27 @@ pub async fn patch_account(
     JsonBody(body): JsonBody<PatchAccountRequest>,
 ) -> Result<Json<Value>, StatusCode> {
     debug!("PATCH /redfish/v1/AccountService/Accounts/{}", account_id);
-    check_privilege(Some(&session), PRIVILEGE_CONFIGURE_USERS)?;
 
-    if let Some(ref role) = body.role_id {
-        if !is_valid_role(role) {
-            warn!("Invalid RoleId '{}' in account patch", role);
-            return Err(StatusCode::BAD_REQUEST);
+    let is_self = session.username == account_id;
+    let has_configure_users = check_privilege(Some(&session), PRIVILEGE_CONFIGURE_USERS).is_ok();
+    if has_configure_users {
+        if let Some(ref role) = body.role_id {
+            if !is_valid_role(role) {
+                warn!("Invalid RoleId '{}' in account patch", role);
+                return Err(StatusCode::BAD_REQUEST);
+            }
+        }
+    } else {
+        if !is_self {
+            return Err(StatusCode::FORBIDDEN);
+        }
+        if body.password.is_none()
+            || body.enabled.is_some()
+            || body.role_id.is_some()
+            || body.locked.is_some()
+            || body.password_expiration_days.is_some()
+        {
+            return Err(StatusCode::FORBIDDEN);
         }
     }
 

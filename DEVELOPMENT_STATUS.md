@@ -104,7 +104,7 @@ bmcweb-ng/
 
 7. **Redfish API — Services**
    - SessionService + Sessions (full login flow, PAM auth, X-Auth-Token); SessionTimeout persisted via AtomicI64; session role now decoded correctly from `GetUserInfo` dictionary replies in QEMU
-   - AccountService + Accounts + Roles (four built-in Redfish roles)
+   - AccountService + Accounts + Roles (four built-in Redfish roles); self-service account PATCH now permits password-only updates for the currently authenticated account while broader edits still require `ConfigureUsers`
    - EventService + Subscriptions + SubmitTestEvent action; PATCH settings persisted
    - TaskService + Tasks collection
    - UpdateService + FirmwareInventory + SimpleUpdate action (202 + Location)
@@ -177,7 +177,7 @@ bmcweb-ng/
 
 ### ✅ Completed DBus wiring — AccountService, sensors, resets, NIC enumeration
 
-1. **AccountService full DBus wiring** — `GET /AccountService/Accounts` lists real users via `ListUsers`; `GET /Accounts/{id}` fetches live user info via `GetUserInfo`; `POST /Accounts` calls `CreateUser`; `PATCH /Accounts/{id}` writes `UserPrivilege`/`UserEnabled` via `set_property`; `DELETE /Accounts/{id}` calls `DeleteUser`
+1. **AccountService full DBus wiring** — `GET /AccountService/Accounts` lists real users via `ListUsers`; `GET /Accounts/{id}` fetches live user info via `GetUserInfo`; `POST /Accounts` calls `CreateUser`; `PATCH /Accounts/{id}` writes `UserPrivilege`/`UserEnabled` via `set_property` and allows ConfigureSelf password-only updates for the caller's own account; `DELETE /Accounts/{id}` calls `DeleteUser`
 2. **Chassis Power sensors** — `GET /Chassis/{id}/Power` enumerates power-supply and voltage sensors from DBus inventory + `xyz.openbmc_project.Sensor` paths
 3. **Chassis Thermal sensors** — `GET /Chassis/{id}/Thermal` enumerates temperature and fan sensors from DBus
 4. **Chassis Sensors collection** — `GET /Chassis/{id}/Sensors` returns the full merged sensor list with `ReadingType`, `Reading`, and `Status`
