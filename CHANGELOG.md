@@ -107,6 +107,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ConfigureUsers` to update only their own `Password`. Any other field, or any
   patch to a different account, still returns `403 Forbidden`.
 
+- **Processor EnvironmentMetrics PATCH** (`src/api/redfish/systems.rs`) —
+  `PATCH /Systems/{id}/Processors/{id}/EnvironmentMetrics` now accepts
+  `PowerLimitWatts.SetPoint` and writes it to
+  `xyz.openbmc_project.Control.Power.Cap.PowerCap` when the matching processor
+  power-cap interface is present.
+
 - **`PasswordExpirationDays` PATCH** (`accounts.rs`) — `PATCH /AccountService/Accounts/{id}`
   now accepts `PasswordExpirationDays` (uint64). Writes `UserPasswordExpiry` via
   `set_property` on `xyz.openbmc_project.User.Attributes`.

@@ -10,6 +10,7 @@
 //! - GET   /redfish/v1/Systems/{system_id}/Processors
 //! - GET   /redfish/v1/Systems/{system_id}/Processors/{processor_id}
 //! - GET   /redfish/v1/Systems/{system_id}/Processors/{processor_id}/EnvironmentMetrics
+//! - PATCH /redfish/v1/Systems/{system_id}/Processors/{processor_id}/EnvironmentMetrics
 //! - GET   /redfish/v1/Systems/{system_id}/Memory
 //! - GET   /redfish/v1/Systems/{system_id}/Memory/{memory_id}
 //! - GET   /redfish/v1/Systems/{system_id}/LogServices
@@ -41,6 +42,7 @@ use axum::{
     response::Json,
     Json as JsonBody,
 };
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
@@ -1548,6 +1550,19 @@ pub async fn reset_bios(
 }
 
 // ---------------------------------------------------------------------------
+#[derive(Debug, Deserialize)]
+pub struct PatchProcessorEnvironmentMetricsRequest {
+    #[serde(rename = "PowerLimitWatts")]
+    pub power_limit_watts: Option<PatchPowerLimitWattsRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PatchPowerLimitWattsRequest {
+    #[serde(rename = "SetPoint")]
+    pub set_point: Option<f64>,
+}
+
+
 // EnvironmentMetrics for Processors
 // ---------------------------------------------------------------------------
 
@@ -1688,6 +1703,64 @@ pub async fn get_processor_environment_metrics(
         "PowerLimitWatts": power_limit_watts.unwrap_or(Value::Null),
         "Status": { "State": "Enabled", "Health": "OK" }
     })))
+}
+
+/// PATCH /redfish/v1/Systems/{system_id}/Processors/{processor_id}/EnvironmentMetrics
+///
+/// Applies `PowerLimitWatts.SetPoint` to the matching
+/// `xyz.openbmc_project.Control.Power.Cap.PowerCap` DBus property when present.
+///
+/// Upstream parity target: processor EnvironmentMetrics power-cap mutability.
+pub async fn patch_processor_environment_metrics(
+    State(state): State<Arc<AppState>>,
+    Extension(session): Extension<UserSession>,
+    Path((system_id, processor_id)): Path<(String, String)>,
+    JsonBody(body): JsonBody<PatchProcessorEnvironmentMetricsRequest>,
+) -> Result<StatusCode, StatusCode> {
+    debug!(
+        "PATCH /redfish/v1/Systems/{}/Processors/{}/EnvironmentMetrics",
+        system_id, processor_id
+    );
+    validate_system_id(&system_id)?;
+    check_privilege(Some(&session), PRIVILEGE_PATCH)?;
+
+    let Some(set_point) = body
+        .power_limit_watts
+        .as_ref()
+        .and_then(|power_limit| power_limit.set_point)
+    else {
+        return Err(StatusCode::BAD_REQUEST);
+    };
+
+    let sensor_prefix = if let Some(num) = processor_id.strip_prefix("cpu") {
+        format!("p{}", num)
+    } else {
+        processor_id.clone()
+    };
+
+    let conn = state.dbus_connection.as_deref().ok_or(StatusCode::NOT_FOUND)?;
+    let client = ZBusClient::from_connection(conn.clone());
+    let control_iface = "xyz.openbmc_project.Control.Power.Cap";
+    let ctrl_objects = client
+        .get_managed_objects(
+            "xyz.openbmc_project.Inventory.Manager",
+            "/xyz/openbmc_project",
+        )
+        .await
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+
+    let Some((path, _)) = ctrl_objects.iter().find(|(path, ifaces)| {
+        path.contains(&sensor_prefix) && ifaces.contains_key(control_iface)
+    }) else {
+        return Err(StatusCode::NOT_FOUND);
+    };
+
+    client
+        .set_property(path, control_iface, "PowerCap", json!(set_point))
+        .await
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ---------------------------------------------------------------------------

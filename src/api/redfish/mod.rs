@@ -46,7 +46,8 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/Systems/:system_id/Processors/:processor_id",
                get(systems::get_processor))
         .route("/Systems/:system_id/Processors/:processor_id/EnvironmentMetrics",
-               get(systems::get_processor_environment_metrics))
+               get(systems::get_processor_environment_metrics)
+               .patch(systems::patch_processor_environment_metrics))
         .route("/Systems/:system_id/Memory",
                get(systems::get_memory_collection))
         .route("/Systems/:system_id/Memory/:memory_id",

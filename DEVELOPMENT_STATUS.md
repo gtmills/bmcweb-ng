@@ -284,7 +284,12 @@ bmcweb-ng/
    - Writes `UserPasswordExpiry` (u64 days) via `set_property` on `xyz.openbmc_project.User.Attributes`
    - Maps to upstream AccountService schema change
 
-10. **Route registration** (`mod.rs`) — All round-3 endpoints wired into the Axum router
+10. **Processor EnvironmentMetrics PATCH** (`systems.rs`) — `PATCH /Systems/{id}/Processors/{id}/EnvironmentMetrics`
+   - Adds `PowerLimitWatts.SetPoint` request decoding
+   - Writes `xyz.openbmc_project.Control.Power.Cap.PowerCap` when a matching processor power-cap interface exists
+   - Returns `204 No Content` on success, `404` when no matching power-cap control is exposed
+
+11. **Route registration** (`mod.rs`) — All round-3 endpoints wired into the Axum router
     - `/Systems/{id}/Storage/{storage_id}`, `/Systems/hypervisor`
     - `/Chassis/{id}/PowerSubsystem/PowerSupplies/{psu_id}`, `/ThermalMetrics`, `/PCIeSlots`
     - `/Managers/{id}/LogServices/Journal[/Entries]`, `/AggregationService`
