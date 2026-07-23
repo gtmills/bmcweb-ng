@@ -310,12 +310,49 @@ bmcweb-ng/
     - `/Chassis/{id}/PowerSubsystem/PowerSupplies/{psu_id}`, `/ThermalMetrics`, `/PCIeSlots`
     - `/Managers/{id}/LogServices/Journal[/Entries]`, `/AggregationService`
 
+### ✅ Completed — Phase 5 Upstream Sync (July 2026)
+
+1. **Systems collection hypervisor awareness** (`systems.rs`) — `GET /Systems` now
+   queries `/state/hypervisor0` and includes `hypervisor` in `Members` when present.
+
+2. **Systems/EthernetInterfaces instance** (`systems.rs`, `mod.rs`) — New
+   `GET /Systems/{id}/EthernetInterfaces/{nic_id}` handler with DBus NIC validation,
+   MAC address, IPv4/IPv6 addresses with CIDR-to-mask conversion.  Collection handler
+   now enumerates dynamically from DBus.
+
+3. **Systems/NetworkInterfaces instance** (`systems.rs`, `mod.rs`) — New
+   `GET /Systems/{id}/NetworkInterfaces/{ni_id}` handler backed by
+   `Inventory.Item.NetworkInterface` DBus objects.  Collection handler updated.
+
+4. **Systems/Storage/{id}/Drives/{drive_id}** (`systems.rs`, `mod.rs`) — Drive instance
+   endpoint under a Storage resource; includes `CapacityBytes`, `MediaType`, `Protocol`
+   from DBus enum strings.
+
+5. **Chassis/Assembly improvements** (`chassis.rs`) — Added `Manufacturer` from
+   `Decorator.Asset`, `Status.State` from `Inventory.Item.Present`, dual inventory
+   path lookup, sorted output, `validate_chassis_id()` guard.
+
+6. **Chassis/Power PowerCap** (`chassis.rs`) — `PowerCapacityWatts` and
+   `PowerLimit.LimitInWatts` read from `Control.Power.Cap / PowerCap` and
+   `PowerCapEnable`.
+
+7. **AccountService MinPasswordLength + MaxPasswordLength** (`accounts.rs`) — PATCH
+   writes `MinPasswordLength`/`MaxPasswordLength` to `xyz.openbmc_project.User.Manager`.
+
+8. **Managers/VirtualMedia** (`managers.rs`, `mod.rs`) — Collection + instance
+   endpoints backed by `xyz.openbmc_project.VirtualMedia.Process` and
+   `VirtualMedia.MountPoint` DBus objects.  `VirtualMedia` link added to Manager
+   resource.
+
+9. **Section header cleanup** (`systems.rs`, `chassis.rs`, `managers.rs`) — Stale
+   phase-marker `TODO N` labels removed from all section dividers.
+
 ### ❌ Not Yet Implemented
 
 1. **LDAP/Active Directory integration**
 
-2. **WebSocket — Additional Endpoints**
-   - Virtual Media full data path (UNIX socket proxy wired; NBD protocol handling incomplete)
+2. **WebSocket — Virtual Media full data path**
+   - UNIX socket proxy wired; NBD protocol handling incomplete
 
 ## Comparison with Original bmcweb
 
@@ -342,19 +379,22 @@ bmcweb-ng/
 | Redfish Systems/Processors | ✅ | ✅ | Collection + individual instance from DBus inventory |
 | Redfish Systems/Processors/EnvironmentMetrics | ✅ | ✅ | Per-CPU temperature/power from sensor DBus tree |
 | Redfish Systems/Memory | ✅ | ✅ | Collection + individual instance from DBus inventory |
-| Redfish Systems/Storage | ✅ | ✅ | Collection + instance; drives from Inventory.Item.Drive |
+| Redfish Systems/Storage | ✅ | ✅ | Collection + instance + Storage/Drive instance; drives from Inventory.Item.Drive |
 | Redfish Systems/LogServices | ✅ | ✅ | EventLog + PostCodes + HostLogger (3 services) |
 | Redfish Systems/PCIeDevices | ✅ | ✅ | Collection + instance from DBus inventory |
-| Redfish Chassis | ✅ | ✅ | GET+PATCH, live name/model/serial/LED; Power/Thermal/Sensors |
+| Redfish Systems/EthernetInterfaces | ✅ | ✅ | Collection + instance; MAC/IP from Network.EthernetInterface DBus |
+| Redfish Systems/NetworkInterfaces | ✅ | ✅ | Collection + instance; from Inventory.Item.NetworkInterface DBus |
+| Redfish Chassis | ✅ | ✅ | GET+PATCH, live name/model/serial/LED; Power(+PowerCap)/Thermal/Sensors |
 | Redfish Chassis/PowerSubsystem | ✅ | ✅ | PowerSubsystem + PowerSupplies collection + PSU instance |
 | Redfish Chassis/ThermalSubsystem | ✅ | ✅ | ThermalSubsystem + Fans + ThermalMetrics |
 | Redfish Chassis/PCIeSlots | ✅ | ✅ | PCIeSlots from Inventory.Item.PCIeSlot |
-| Redfish Chassis/Assembly | ✅ | ✅ | FRU assembly data from DBus inventory |
+| Redfish Chassis/Assembly | ✅ | ✅ | FRU assembly with Manufacturer + Present state from DBus |
 | Redfish Cables | ✅ | ✅ | Collection + instance from xyz.openbmc_project.Inventory.Item.Cable |
-| Redfish Systems/hypervisor | ✅ | ✅ | IBM POWER hypervisor partition stub |
+| Redfish Systems/hypervisor | ✅ | ✅ | Dynamic; advertised in /Systems collection when DBus object present |
 | Redfish Managers | ✅ | ✅ | GET+PATCH NIC; live FirmwareVersion/hostname/NTP/IPMI; Reset via DBus |
 | Redfish Managers/ManagerDiagnosticData | ✅ | ✅ | Memory/uptime from /proc/meminfo and /proc/uptime |
 | Redfish Managers/LogServices/Journal | ✅ | ✅ | Journal entries via journalctl; graceful degradation |
+| Redfish Managers/VirtualMedia | ✅ | ✅ | Collection + instance; Active/ImageURL/Type from VirtualMedia DBus |
 | Redfish AggregationService | ✅ | ✅ | Stub (ServiceEnabled=false); maps to upstream aggregation_service.hpp |
 | Redfish OData service document | ✅ | ✅ | GET /odata; $metadata in http.rs (unauthenticated) |
 | Redfish Fabrics | ✅ | ✅ | Collection + Fabric instance + Switches[/{id}] from PCIeSwitch DBus |
@@ -365,7 +405,7 @@ bmcweb-ng/
 | Redfish Chassis/NetworkAdapters/{id} | ✅ | ✅ | Instance with Manufacturer/Model/PartNumber from DBus |
 | Redfish Managers/LogServices/DBusEventLog | ✅ | ✅ | DBus event log via xyz.openbmc_project.Logging |
 | SessionService | ✅ | ✅ | Full login flow, X-Auth-Token, role fetched from DBus |
-| AccountService | ✅ | ✅ | Full CRUD + PasswordExpirationDays + PATCH lockout policy + PrivilegeMap |
+| AccountService | ✅ | ✅ | Full CRUD + PasswordExpirationDays + MinPasswordLength/MaxPasswordLength + PATCH lockout policy + PrivilegeMap |
 | EventService | ✅ | ✅ | Subscriptions + SubmitTestEvent + SSE stream + persisted PATCH settings + AtomicI64 timeout |
 | TaskService | ✅ | ✅ | Collection + instance management |
 | UpdateService | ✅ | ✅ | FirmwareInventory from DBus + SimpleUpdate |
