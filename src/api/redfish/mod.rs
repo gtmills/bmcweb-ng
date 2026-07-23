@@ -66,6 +66,8 @@ pub fn router() -> Router<Arc<AppState>> {
                get(systems::get_processor_operating_config))
         .route("/Systems/:system_id/EthernetInterfaces",
                get(systems::get_ethernet_interfaces_collection))
+        .route("/Systems/:system_id/EthernetInterfaces/:nic_id",
+               get(systems::get_ethernet_interface))
         .route("/Systems/:system_id/NetworkInterfaces",
                get(systems::get_network_interfaces_collection))
         .route("/Systems/:system_id/LogServices",

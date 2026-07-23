@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`GET /Systems/{id}/EthernetInterfaces/{nic_id}` instance endpoint** (`systems.rs`,
+  `redfish/mod.rs`) — New handler for individual host EthernetInterface resources.
+  Validates the NIC id against DBus (`xyz.openbmc_project.Network.EthernetInterface /
+  MACAddress`); returns 404 when not found.  Enumerates child IP address objects for
+  `IPv4Addresses` and `IPv6Addresses` including address origin and subnet mask.
+  Collection handler updated to dynamically enumerate NICs from DBus and use the
+  dynamic `@odata.id` URL. Matches upstream `redfish-core/lib/ethernet.hpp`.
+  Added `prefix_to_mask()` helper for CIDR → dotted-decimal conversion.
+
 - **`/Systems` collection advertises hypervisor member dynamically** (`systems.rs`) —
   `GET /redfish/v1/Systems` now probes `xyz.openbmc_project.State.Host /
   CurrentHostState` at `/state/hypervisor0`; when the object exists the

@@ -23,6 +23,7 @@
 //! - GET   /redfish/v1/Systems/{system_id}/Storage
 //! - GET   /redfish/v1/Systems/{system_id}/Storage/{storage_id}
 //! - GET   /redfish/v1/Systems/{system_id}/EthernetInterfaces
+//! - GET   /redfish/v1/Systems/{system_id}/EthernetInterfaces/{nic_id}
 //! - GET   /redfish/v1/Systems/hypervisor   (IBM POWER hypervisor partition)
 //!
 //! Reference: DMTF Redfish ComputerSystem schema v1.20.0
@@ -1188,22 +1189,214 @@ pub async fn get_storage_collection(
 }
 
 /// GET /redfish/v1/Systems/{system_id}/EthernetInterfaces
+///
+/// Returns the host-side EthernetInterface collection.
+///
+/// OpenBMC exposes host NIC data via `xyz.openbmc_project.Network` objects
+/// that implement `xyz.openbmc_project.Network.EthernetInterface` under paths
+/// prefixed with `/xyz/openbmc_project/network/` (same service used for BMC
+/// management NICs).  On QEMU / platforms that do not expose host NICs via
+/// DBus the collection is empty.
+///
+/// Reference: DMTF Redfish EthernetInterfaceCollection schema
+/// Upstream: redfish-core/lib/ethernet.hpp
 pub async fn get_ethernet_interfaces_collection(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Path(system_id): Path<String>,
 ) -> Result<Json<Value>, StatusCode> {
     debug!("GET /redfish/v1/Systems/{}/EthernetInterfaces", system_id);
     validate_system_id(&system_id)?;
 
-    // Host-side NICs — BMC does not enumerate host NICs on QEMU;
-    // a real platform would call GetManagedObjects on the host network service.
+    // Enumerate host-facing NICs from DBus network service.
+    // On QEMU these are typically absent; on real hardware the host OS NICs
+    // may be exposed through the `xyz.openbmc_project.Network` service.
+    let members: Vec<Value> = if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        let nic_iface = "xyz.openbmc_project.Network.EthernetInterface";
+        let host_prefix = "/xyz/openbmc_project/network/";
+        match client
+            .get_managed_objects(
+                "xyz.openbmc_project.Network",
+                "/xyz/openbmc_project/network",
+            )
+            .await
+        {
+            Ok(objects) => {
+                let mut nics: Vec<String> = objects
+                    .into_iter()
+                    .filter(|(path, ifaces)| {
+                        ifaces.contains_key(nic_iface)
+                            && path.starts_with(host_prefix)
+                            // Exclude MAC sub-objects and config objects
+                            && !path.contains("/network/config")
+                            && path[host_prefix.len()..].find('/').is_none()
+                    })
+                    .filter_map(|(path, _)| {
+                        path.strip_prefix(host_prefix).map(|s| s.to_string())
+                    })
+                    .collect();
+                nics.sort();
+                nics.into_iter()
+                    .map(|nic_id| {
+                        json!({
+                            "@odata.id": format!(
+                                "/redfish/v1/Systems/{}/EthernetInterfaces/{}",
+                                system_id, nic_id
+                            )
+                        })
+                    })
+                    .collect()
+            }
+            Err(_) => vec![],
+        }
+    } else {
+        vec![]
+    };
+
     Ok(Json(json!({
         "@odata.type": "#EthernetInterfaceCollection.EthernetInterfaceCollection",
-        "@odata.id": "/redfish/v1/Systems/system/EthernetInterfaces",
+        "@odata.id": format!("/redfish/v1/Systems/{}/EthernetInterfaces", system_id),
         "Name": "Ethernet Interface Collection",
-        "Members@odata.count": 0,
-        "Members": []
+        "Members@odata.count": members.len(),
+        "Members": members
     })))
+}
+
+/// GET /redfish/v1/Systems/{system_id}/EthernetInterfaces/{nic_id}
+///
+/// Returns a single host EthernetInterface resource.
+///
+/// Reference: DMTF Redfish EthernetInterface schema v1.9.0
+/// Upstream: redfish-core/lib/ethernet.hpp
+///
+/// OpenBMC DBus:
+///   Service: xyz.openbmc_project.Network
+///   Object:  /xyz/openbmc_project/network/<nic_id>
+///   Interfaces:
+///     xyz.openbmc_project.Network.EthernetInterface :: MACAddress, DHCPEnabled
+///     xyz.openbmc_project.Network.IP (child objects with Address, PrefixLength, Gateway)
+pub async fn get_ethernet_interface(
+    State(state): State<Arc<AppState>>,
+    Path((system_id, nic_id)): Path<(String, String)>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!(
+        "GET /redfish/v1/Systems/{}/EthernetInterfaces/{}",
+        system_id, nic_id
+    );
+    validate_system_id(&system_id)?;
+
+    let (mac_address, ipv4_addresses, ipv6_addresses) =
+        if let Some(conn) = state.dbus_connection.as_deref() {
+            let client = ZBusClient::from_connection(conn.clone());
+            let dbus_path = format!("/xyz/openbmc_project/network/{}", nic_id);
+            let net_iface = "xyz.openbmc_project.Network.EthernetInterface";
+
+            // Validate that the NIC exists in DBus
+            let mac = match client
+                .get_property(&dbus_path, net_iface, "MACAddress")
+                .await
+            {
+                Ok(v) => v
+                    .as_str()
+                    .unwrap_or("00:00:00:00:00:00")
+                    .to_string(),
+                Err(_) => return Err(StatusCode::NOT_FOUND),
+            };
+
+            // Enumerate child IP address objects
+            let ip_objects = client
+                .get_managed_objects(
+                    "xyz.openbmc_project.Network",
+                    &dbus_path,
+                )
+                .await
+                .unwrap_or_default();
+
+            let ipv4_iface = "xyz.openbmc_project.Network.IP";
+            let mut ipv4: Vec<Value> = Vec::new();
+            let mut ipv6: Vec<Value> = Vec::new();
+
+            for (path, ifaces) in &ip_objects {
+                if let Some(props) = ifaces.get(ipv4_iface) {
+                    let addr = props
+                        .get("Address")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let prefix = props
+                        .get("PrefixLength")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    let gateway = props
+                        .get("Gateway")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let origin = props
+                        .get("Origin")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+
+                    if path.contains("ipv6") || addr.contains(':') {
+                        ipv6.push(json!({
+                            "Address": addr,
+                            "PrefixLength": prefix,
+                            "AddressOrigin": if origin.ends_with(".DHCP") { "DHCPv6" } else { "Static" }
+                        }));
+                    } else {
+                        ipv4.push(json!({
+                            "Address": addr,
+                            "SubnetMask": prefix_to_mask(prefix as u8),
+                            "Gateway": gateway,
+                            "AddressOrigin": if origin.ends_with(".DHCP") { "DHCP" } else { "Static" }
+                        }));
+                    }
+                }
+            }
+
+            (mac, ipv4, ipv6)
+        } else {
+            return Err(StatusCode::NOT_FOUND);
+        };
+
+    Ok(Json(json!({
+        "@odata.type": "#EthernetInterface.v1_9_0.EthernetInterface",
+        "@odata.id": format!(
+            "/redfish/v1/Systems/{}/EthernetInterfaces/{}",
+            system_id, nic_id
+        ),
+        "Id": nic_id,
+        "Name": nic_id,
+        "Description": "Host Ethernet Interface",
+        "InterfaceEnabled": true,
+        "MACAddress": mac_address,
+        "IPv4Addresses": ipv4_addresses,
+        "IPv6Addresses": ipv6_addresses,
+        "IPv4StaticAddresses": [],
+        "IPv6StaticAddresses": [],
+        "NameServers": [],
+        "StaticNameServers": [],
+        "Status": { "State": "Enabled", "Health": "OK" }
+    })))
+}
+
+/// Convert a CIDR prefix length to a dotted-decimal subnet mask string.
+fn prefix_to_mask(prefix: u8) -> String {
+    if prefix > 32 {
+        return "255.255.255.0".to_string();
+    }
+    let mask: u32 = if prefix == 0 {
+        0
+    } else {
+        !0u32 << (32 - prefix)
+    };
+    format!(
+        "{}.{}.{}.{}",
+        (mask >> 24) & 0xFF,
+        (mask >> 16) & 0xFF,
+        (mask >> 8) & 0xFF,
+        mask & 0xFF
+    )
 }
 
 /// GET /redfish/v1/Systems/{system_id}/NetworkInterfaces
