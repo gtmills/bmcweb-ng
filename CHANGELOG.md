@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`GET /Managers/{id}/VirtualMedia[/{vm_id}]` endpoints** (`managers.rs`,
+  `redfish/mod.rs`) — New `VirtualMediaCollection` and `VirtualMedia` instance
+  handlers backed by `xyz.openbmc_project.VirtualMedia.Process` DBus objects.
+  Collection enumerates slots from `/xyz/openbmc_project/VirtualMedia/`; instance
+  reads `Active`, `WriteProtected` from `VirtualMedia.Process` and `ImageURL`,
+  `Type` from `VirtualMedia.MountPoint`.  Returns `Inserted`, `ConnectedVia`,
+  `MediaTypes` (CD/DVD for Web type, USBStick for NBD), and InsertMedia/EjectMedia
+  action targets.  `VirtualMedia` link added to Manager resource.
+  Maps to upstream `redfish-core/lib/virtual_media.hpp`.
+
 - **`GET /Chassis/{id}/Power` power cap from DBus** (`chassis.rs`) —
   `PowerCapacityWatts` and `PowerLimit.LimitInWatts` now read from
   `xyz.openbmc_project.Control.Power.Cap / PowerCap` and `PowerCapEnable` at

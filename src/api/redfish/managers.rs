@@ -11,6 +11,8 @@
 //! - GET  /redfish/v1/Managers/{manager_id}/LogServices
 //! - GET  /redfish/v1/Managers/{manager_id}/LogServices/Journal
 //! - GET  /redfish/v1/Managers/{manager_id}/LogServices/Journal/Entries
+//! - GET  /redfish/v1/Managers/{manager_id}/VirtualMedia
+//! - GET  /redfish/v1/Managers/{manager_id}/VirtualMedia/{vm_id}
 //!
 //! Reference: DMTF Redfish Manager schema v1.19.0
 //!
@@ -123,6 +125,7 @@ pub async fn get_manager(
         "NetworkProtocol": { "@odata.id": "/redfish/v1/Managers/bmc/NetworkProtocol" },
         "LogServices": { "@odata.id": "/redfish/v1/Managers/bmc/LogServices" },
         "ManagerDiagnosticData": { "@odata.id": "/redfish/v1/Managers/bmc/ManagerDiagnosticData" },
+        "VirtualMedia": { "@odata.id": "/redfish/v1/Managers/bmc/VirtualMedia" },
         "SerialConsole": {
             "ServiceEnabled": true,
             "MaxConcurrentSessions": 15,
@@ -1333,6 +1336,188 @@ pub async fn get_manager_dbus_eventlog_entry(
         "Id": entry_id,
         "Name": format!("Log Entry {}", entry_id),
         "EntryType": "Event"
+    })))
+}
+
+
+// ---------------------------------------------------------------------------
+// VirtualMedia
+// ---------------------------------------------------------------------------
+
+/// GET /redfish/v1/Managers/{manager_id}/VirtualMedia
+///
+/// Returns the VirtualMediaCollection for this manager.
+///
+/// Reference: DMTF Redfish VirtualMediaCollection schema
+/// Upstream: redfish-core/lib/virtual_media.hpp
+///
+/// On OpenBMC, virtual media slots are objects under
+/// `/xyz/openbmc_project/VirtualMedia/` with interface
+/// `xyz.openbmc_project.VirtualMedia.Process`.
+/// Each slot maps to a `VirtualMedia` resource.
+pub async fn get_virtual_media_collection(
+    State(state): State<Arc<AppState>>,
+    Path(manager_id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!("GET /redfish/v1/Managers/{}/VirtualMedia", manager_id);
+    validate_manager_id(&manager_id)?;
+
+    let members: Vec<Value> = if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        let vm_iface = "xyz.openbmc_project.VirtualMedia.Process";
+        match client
+            .get_managed_objects(
+                "xyz.openbmc_project.VirtualMedia",
+                "/xyz/openbmc_project/VirtualMedia",
+            )
+            .await
+        {
+            Ok(objects) => {
+                let mut slots: Vec<String> = objects
+                    .into_iter()
+                    .filter(|(_, ifaces)| ifaces.contains_key(vm_iface))
+                    .filter_map(|(path, _)| {
+                        path.rsplit('/').next().map(|s| s.to_string())
+                    })
+                    .collect();
+                slots.sort();
+                slots
+                    .into_iter()
+                    .map(|slot_id| {
+                        json!({
+                            "@odata.id": format!(
+                                "/redfish/v1/Managers/{}/VirtualMedia/{}",
+                                manager_id, slot_id
+                            )
+                        })
+                    })
+                    .collect()
+            }
+            Err(e) => {
+                warn!("Failed to enumerate VirtualMedia from DBus: {}", e);
+                vec![]
+            }
+        }
+    } else {
+        vec![]
+    };
+
+    Ok(Json(json!({
+        "@odata.type": "#VirtualMediaCollection.VirtualMediaCollection",
+        "@odata.id": format!("/redfish/v1/Managers/{}/VirtualMedia", manager_id),
+        "Name": "Virtual Media Collection",
+        "Description": "Virtual removable media for this manager",
+        "Members@odata.count": members.len(),
+        "Members": members
+    })))
+}
+
+/// GET /redfish/v1/Managers/{manager_id}/VirtualMedia/{vm_id}
+///
+/// Returns a single VirtualMedia resource.
+///
+/// Reference: DMTF Redfish VirtualMedia schema v1.7.0
+/// Upstream: redfish-core/lib/virtual_media.hpp
+///
+/// OpenBMC DBus:
+///   Service:   xyz.openbmc_project.VirtualMedia
+///   Object:    /xyz/openbmc_project/VirtualMedia/<vm_id>
+///   Interface: xyz.openbmc_project.VirtualMedia.Process
+///     Properties: Active (bool), Endpoint (string), WriteProtected (bool)
+///   Interface: xyz.openbmc_project.VirtualMedia.MountPoint (optional)
+///     Properties: ImageURL (string), Type (enum: Nbd, Web)
+pub async fn get_virtual_media(
+    State(state): State<Arc<AppState>>,
+    Path((manager_id, vm_id)): Path<(String, String)>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!(
+        "GET /redfish/v1/Managers/{}/VirtualMedia/{}",
+        manager_id, vm_id
+    );
+    validate_manager_id(&manager_id)?;
+
+    let (inserted, image_url, write_protected, media_types) =
+        if let Some(conn) = state.dbus_connection.as_deref() {
+            let client = ZBusClient::from_connection(conn.clone());
+            let vm_path = format!("/xyz/openbmc_project/VirtualMedia/{}", vm_id);
+            let process_iface = "xyz.openbmc_project.VirtualMedia.Process";
+            let mount_iface = "xyz.openbmc_project.VirtualMedia.MountPoint";
+
+            // Validate the slot exists
+            let active = match client
+                .get_property(&vm_path, process_iface, "Active")
+                .await
+            {
+                Ok(v) => v.as_bool().unwrap_or(false),
+                Err(_) => return Err(StatusCode::NOT_FOUND),
+            };
+
+            let write_protected = client
+                .get_property(&vm_path, process_iface, "WriteProtected")
+                .await
+                .ok()
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+
+            let image_url = client
+                .get_property(&vm_path, mount_iface, "ImageURL")
+                .await
+                .ok()
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_default();
+
+            let vm_type_raw = client
+                .get_property(&vm_path, mount_iface, "Type")
+                .await
+                .ok()
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_default();
+
+            let media_types = if vm_type_raw.ends_with(".Web") {
+                vec!["CD", "DVD"]
+            } else {
+                vec!["USBStick"]
+            };
+
+            (active, image_url, write_protected, media_types)
+        } else {
+            return Err(StatusCode::NOT_FOUND);
+        };
+
+    Ok(Json(json!({
+        "@odata.type": "#VirtualMedia.v1_7_0.VirtualMedia",
+        "@odata.id": format!(
+            "/redfish/v1/Managers/{}/VirtualMedia/{}",
+            manager_id, vm_id
+        ),
+        "Id": vm_id,
+        "Name": vm_id,
+        "Description": "Virtual Removable Media",
+        "MediaTypes": media_types,
+        "Inserted": inserted,
+        "Image": image_url,
+        "WriteProtected": write_protected,
+        "ConnectedVia": if inserted { "URI" } else { "NotConnected" },
+        "TransferMethod": "Stream",
+        "TransferProtocolType": "HTTP",
+        "Status": {
+            "State": if inserted { "Enabled" } else { "StandbyOffline" },
+            "Health": "OK"
+        },
+        "Actions": {
+            "#VirtualMedia.InsertMedia": {
+                "target": format!(
+                    "/redfish/v1/Managers/{}/VirtualMedia/{}/Actions/VirtualMedia.InsertMedia",
+                    manager_id, vm_id
+                )
+            },
+            "#VirtualMedia.EjectMedia": {
+                "target": format!(
+                    "/redfish/v1/Managers/{}/VirtualMedia/{}/Actions/VirtualMedia.EjectMedia",
+                    manager_id, vm_id
+                )
+            }
+        }
     })))
 }
 

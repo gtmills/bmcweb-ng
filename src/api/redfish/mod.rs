@@ -177,6 +177,10 @@ pub fn router() -> Router<Arc<AppState>> {
                get(managers::get_manager_dbus_eventlog_entry))
         .route("/Managers/:manager_id/ManagerDiagnosticData",
                get(managers::get_manager_diagnostic_data))
+        .route("/Managers/:manager_id/VirtualMedia",
+               get(managers::get_virtual_media_collection))
+        .route("/Managers/:manager_id/VirtualMedia/:vm_id",
+               get(managers::get_virtual_media))
         .route("/Managers/:manager_id/NetworkProtocol/HTTPS/Certificates",
                get(certificate_service::get_https_certificates_collection))
         .route("/Managers/:manager_id/NetworkProtocol/HTTPS/Certificates/:cert_id",
