@@ -65,7 +65,9 @@ async fn fetch_user_role(
     {
         Ok(info) => {
             // Response is a dict. Prefer UserGroups when present, but some
-            // systems only expose UserPrivilege.
+            // systems expose the values as nested zvariant structures, so fall
+            // back to string matching on the JSON representation as needed.
+            let info_str = info.to_string();
             if let Some(groups) = info.get("UserGroups").and_then(|v| v.as_array()) {
                 for group in groups {
                     let role = match group.as_str().unwrap_or("") {
@@ -89,6 +91,18 @@ async fn fetch_user_role(
                     _ => "ReadOnly",
                 }
                 .to_string();
+            }
+            if info_str.contains("priv-admin") {
+                return "Administrator".to_string();
+            }
+            if info_str.contains("priv-operator") {
+                return "Operator".to_string();
+            }
+            if info_str.contains("priv-noaccess") {
+                return "NoAccess".to_string();
+            }
+            if info_str.contains("priv-user") {
+                return "ReadOnly".to_string();
             }
             warn!("Could not determine role for user '{}' from GetUserInfo response", username);
             "ReadOnly".to_string()

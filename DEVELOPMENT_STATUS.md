@@ -3,7 +3,7 @@
 ## Overview
 This document tracks the development progress of bmcweb-ng, a Rust rewrite of the OpenBMC bmcweb server.
 
-**Last Updated:** 2026-07-21 — v0.4.1 + QEMU validation refresh
+**Last Updated:** 2026-07-23 — v0.4.1 + DBus role-decoding fix validated in QEMU
 
 ## Project Structure
 
@@ -103,7 +103,7 @@ bmcweb-ng/
    - Managers sub-resources: NetworkProtocol, EthernetInterfaces, LogServices
 
 7. **Redfish API — Services**
-   - SessionService + Sessions (full login flow, PAM auth, X-Auth-Token); SessionTimeout persisted via AtomicI64
+   - SessionService + Sessions (full login flow, PAM auth, X-Auth-Token); SessionTimeout persisted via AtomicI64; session role now decoded correctly from `GetUserInfo` dictionary replies in QEMU
    - AccountService + Accounts + Roles (four built-in Redfish roles)
    - EventService + Subscriptions + SubmitTestEvent action; PATCH settings persisted
    - TaskService + Tasks collection
@@ -381,6 +381,7 @@ Measured on OpenBMC `qemuarm` (emulated Cortex-A15, 256 MB RAM). Binary:
 | Redfish routes (v0.4.1) | — | **120+** | ✅ Core smoke-tested in QEMU; broad route set present |
 | Unit tests (v0.4.1) | — | **157** | ⚠️ Windows host in this workspace lacks `link.exe`, so local `cargo test` could not be rerun here |
 | QEMU smoke checks (2026-07-21) | — | **17/17** | ✅ Injected `bmcweb-ng` release binary into OpenBMC QEMU and validated core Redfish routes |
+| QEMU privileged PATCH checks (2026-07-23) | — | **5/5** | ✅ EventService, SessionService, and NetworkProtocol mutating paths validated after DBus role-decoding fix |
 
 ## Development Roadmap
 

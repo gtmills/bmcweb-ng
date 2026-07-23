@@ -387,6 +387,16 @@ impl DbusClient for ZBusClient {
         //   array<string>   → list of strings
         //   dict<string,v>  → property map (GetUserInfo)
         //
+        if method == "GetUserInfo" {
+            if let Ok(map) = reply_msg.body().deserialize::<std::collections::HashMap<String, OwnedValue>>() {
+                let mut result = serde_json::Map::new();
+                for (key, value) in map {
+                    result.insert(key, zvariant_to_json(value)?);
+                }
+                return Ok(Value::Object(result));
+            }
+        }
+
         // We attempt to decode as OwnedValue first, then fall back to null.
         match reply_msg.body().deserialize::<OwnedValue>() {
             Ok(owned) => {
