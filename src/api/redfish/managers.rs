@@ -1240,6 +1240,7 @@ pub async fn get_manager_dbus_eventlog_entries(
     );
     validate_manager_id(&manager_id)?;
 
+    let entry_iface = "xyz.openbmc_project.Logging.Entry";
     let members: Vec<Value> = if let Some(conn) = state.dbus_connection.as_deref() {
         let client = ZBusClient::from_connection(conn.clone());
         match client
@@ -1250,7 +1251,6 @@ pub async fn get_manager_dbus_eventlog_entries(
             .await
         {
             Ok(objects) => {
-                let entry_iface = "xyz.openbmc_project.Logging.Entry";
                 let mut entries: Vec<(u64, Value)> = objects
                     .iter()
                     .filter(|(_, ifaces)| ifaces.contains_key(entry_iface))
@@ -1291,6 +1291,48 @@ pub async fn get_manager_dbus_eventlog_entries(
         "Name": "DBus Event Log Entries",
         "Members@odata.count": members.len(),
         "Members": members
+    })))
+}
+
+/// GET /redfish/v1/Managers/{manager_id}/LogServices/DBusEventLog/Entries/{entry_id}
+pub async fn get_manager_dbus_eventlog_entry(
+    State(state): State<Arc<AppState>>,
+    Path((manager_id, entry_id)): Path<(String, String)>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!(
+        "GET /redfish/v1/Managers/{}/LogServices/DBusEventLog/Entries/{}",
+        manager_id, entry_id
+    );
+    validate_manager_id(&manager_id)?;
+
+    let conn = state.dbus_connection.as_deref().ok_or(StatusCode::NOT_FOUND)?;
+    let client = ZBusClient::from_connection(conn.clone());
+    let objects = client
+        .get_managed_objects(
+            "xyz.openbmc_project.Logging",
+            "/xyz/openbmc_project/logging",
+        )
+        .await
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+
+    let path = format!("/xyz/openbmc_project/logging/{}", entry_id);
+    let entry_iface = "xyz.openbmc_project.Logging.Entry";
+    if !objects
+        .get(&path)
+        .is_some_and(|ifaces| ifaces.contains_key(entry_iface))
+    {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    Ok(Json(json!({
+        "@odata.type": "#LogEntry.v1_15_0.LogEntry",
+        "@odata.id": format!(
+            "/redfish/v1/Managers/{}/LogServices/DBusEventLog/Entries/{}",
+            manager_id, entry_id
+        ),
+        "Id": entry_id,
+        "Name": format!("Log Entry {}", entry_id),
+        "EntryType": "Event"
     })))
 }
 

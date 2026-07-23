@@ -123,6 +123,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dropbear `Running` property when available and continues to fall back to
   enabled-by-default behavior when the backing DBus object is absent.
 
+- **Manager DBusEventLog entry route** (`src/api/redfish/managers.rs`) —
+  `GET /Managers/{id}/LogServices/DBusEventLog/Entries/{entry_id}` now returns a
+  concrete entry resource when the matching DBus log object exists, while the
+  collection path continues to return an empty list cleanly when no DBus entries
+  are available.
+
 - **`PasswordExpirationDays` PATCH** (`accounts.rs`) — `PATCH /AccountService/Accounts/{id}`
   now accepts `PasswordExpirationDays` (uint64). Writes `UserPasswordExpiry` via
   `set_property` on `xyz.openbmc_project.User.Attributes`.

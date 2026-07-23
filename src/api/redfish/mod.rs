@@ -166,6 +166,8 @@ pub fn router() -> Router<Arc<AppState>> {
                get(managers::get_manager_dbus_eventlog_service))
         .route("/Managers/:manager_id/LogServices/DBusEventLog/Entries",
                get(managers::get_manager_dbus_eventlog_entries))
+        .route("/Managers/:manager_id/LogServices/DBusEventLog/Entries/:entry_id",
+               get(managers::get_manager_dbus_eventlog_entry))
         .route("/Managers/:manager_id/ManagerDiagnosticData",
                get(managers::get_manager_diagnostic_data))
         .route("/Managers/:manager_id/NetworkProtocol/HTTPS/Certificates",

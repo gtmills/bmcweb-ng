@@ -108,6 +108,7 @@ bmcweb-ng/
    - EventService + Subscriptions + SubmitTestEvent action; PATCH settings persisted
    - Manager EthernetInterface PATCH now enforces `ConfigureComponents`, matching upstream privilege intent for interface mutation
    - Manager NetworkProtocol now reflects SSH `ProtocolEnabled` from DBus when the dropbear service object is present, and still degrades cleanly when it is absent
+   - Manager DBusEventLog now exposes both collection and per-entry GET routes, returning empty collections cleanly when no DBus entries are present
    - TaskService + Tasks collection
    - UpdateService + FirmwareInventory + SimpleUpdate action (202 + Location)
 
