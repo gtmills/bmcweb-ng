@@ -390,7 +390,7 @@ pub async fn create_subscription(
     State(state): State<Arc<AppState>>,
     Extension(session): Extension<UserSession>,
     JsonBody(body): JsonBody<CreateSubscriptionRequest>,
-) -> Result<(StatusCode, Json<Value>), StatusCode> {
+) -> Result<(StatusCode, [(String, String); 1], Json<Value>), StatusCode> {
     debug!("POST /redfish/v1/EventService/Subscriptions");
     check_privilege(Some(&session), PRIVILEGE_CONFIGURE_USERS)?;
 
@@ -439,10 +439,14 @@ pub async fn create_subscription(
         })?;
 
     info!("Created event subscription '{}'", sub.id);
-    let _location = format!("/redfish/v1/EventService/Subscriptions/{}", sub.id);
+    let location = format!("/redfish/v1/EventService/Subscriptions/{}", sub.id);
     let body_json = subscription_to_json(&sub);
 
-    Ok((StatusCode::CREATED, Json(body_json)))
+    Ok((
+        StatusCode::CREATED,
+        [("Location".to_string(), location)],
+        Json(body_json),
+    ))
 }
 
 /// GET /redfish/v1/EventService/Subscriptions/{subscription_id}

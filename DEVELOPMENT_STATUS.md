@@ -112,6 +112,7 @@ bmcweb-ng/
    - PCIeDevice resources now include `Location.PartLocation.ServiceLabel` when DBus location-code metadata is exposed
    - Chassis sensor resources now include direct per-sensor GET handling, including frequency sensor type translation to `ReadingType: Frequency`
    - Processor resources now expose `FirmwareVersion` and `Location.PartLocation.ServiceLabel` when DBus metadata is present
+   - Created Account and EventService subscription responses now include `Location` headers
    - TaskService + Tasks collection
    - UpdateService + FirmwareInventory + SimpleUpdate action (202 + Location)
 

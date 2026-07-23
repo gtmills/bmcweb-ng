@@ -147,6 +147,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Location.PartLocation.ServiceLabel` from the processor location-code
   decorator.
 
+- **Location headers on create responses** (`src/api/redfish/accounts.rs`, `src/api/redfish/event_service.rs`) —
+  account creation and EventService subscription creation now return `Location`
+  headers pointing at the newly created resource, matching the existing session,
+  telemetry, and task response patterns.
+
 - **`PasswordExpirationDays` PATCH** (`accounts.rs`) — `PATCH /AccountService/Accounts/{id}`
   now accepts `PasswordExpirationDays` (uint64). Writes `UserPasswordExpiry` via
   `set_property` on `xyz.openbmc_project.User.Attributes`.

@@ -388,7 +388,7 @@ pub async fn create_account(
     State(state): State<Arc<AppState>>,
     Extension(session): Extension<UserSession>,
     JsonBody(body): JsonBody<CreateAccountRequest>,
-) -> Result<(StatusCode, Json<Value>), StatusCode> {
+) -> Result<(StatusCode, [(String, String); 1], Json<Value>), StatusCode> {
     debug!("POST /redfish/v1/AccountService/Accounts - user: {}", body.username);
     check_privilege(Some(&session), PRIVILEGE_CONFIGURE_USERS)?;
 
@@ -456,7 +456,14 @@ pub async fn create_account(
         }
     });
 
-    Ok((StatusCode::CREATED, Json(response)))
+    Ok((
+        StatusCode::CREATED,
+        [(
+            "Location".to_string(),
+            format!("/redfish/v1/AccountService/Accounts/{}", body.username),
+        )],
+        Json(response),
+    ))
 }
 
 /// GET /redfish/v1/AccountService/Accounts/{account_id}
