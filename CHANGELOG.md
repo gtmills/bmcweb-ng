@@ -140,6 +140,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from DBus and maps `/xyz/openbmc_project/sensors/frequency/...` to
   `ReadingType: Frequency` with `ReadingUnits: Hz`.
 
+- **Processor firmware and location metadata** (`src/api/redfish/systems.rs`) —
+  `GET /Systems/{id}/Processors/{id}` now reports `FirmwareVersion` from the
+  processor `ran_on` software association when a matching
+  `xyz.openbmc_project.Software.Version` object is present, and includes
+  `Location.PartLocation.ServiceLabel` from the processor location-code
+  decorator.
+
 - **`PasswordExpirationDays` PATCH** (`accounts.rs`) — `PATCH /AccountService/Accounts/{id}`
   now accepts `PasswordExpirationDays` (uint64). Writes `UserPasswordExpiry` via
   `set_property` on `xyz.openbmc_project.User.Attributes`.

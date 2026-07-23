@@ -111,6 +111,7 @@ bmcweb-ng/
    - Manager DBusEventLog now exposes both collection and per-entry GET routes, returning empty collections cleanly when no DBus entries are present
    - PCIeDevice resources now include `Location.PartLocation.ServiceLabel` when DBus location-code metadata is exposed
    - Chassis sensor resources now include direct per-sensor GET handling, including frequency sensor type translation to `ReadingType: Frequency`
+   - Processor resources now expose `FirmwareVersion` and `Location.PartLocation.ServiceLabel` when DBus metadata is present
    - TaskService + Tasks collection
    - UpdateService + FirmwareInventory + SimpleUpdate action (202 + Location)
 

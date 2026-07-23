@@ -585,7 +585,7 @@ pub async fn get_processor(
     let cpu_iface = "xyz.openbmc_project.Inventory.Item.Cpu";
 
     // Try to locate this processor in the DBus inventory
-    let (model, total_cores, total_threads) =
+    let (model, total_cores, total_threads, firmware_version, location) =
         if let Some(conn) = state.dbus_connection.as_deref() {
             let client = ZBusClient::from_connection(conn.clone());
             match client
@@ -602,7 +602,7 @@ pub async fn get_processor(
                             && path.rsplit('/').next() == Some(processor_id.as_str())
                     });
                     match found {
-                        Some((_, ifaces)) => {
+                        Some((path, ifaces)) => {
                             let props = &ifaces[cpu_iface];
                             let model = props
                                 .get("Model")
@@ -617,14 +617,33 @@ pub async fn get_processor(
                                 .get("ThreadCount")
                                 .and_then(|v| v.as_u64())
                                 .unwrap_or(0);
-                            (model, cores, threads)
+                            let location = ifaces
+                                .get("xyz.openbmc_project.Inventory.Decorator.LocationCode")
+                                .and_then(|loc_props| loc_props.get("LocationCode"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let firmware_version = objects
+                                .get(&format!("{}/ran_on", path))
+                                .and_then(|assoc_ifaces| assoc_ifaces.get("xyz.openbmc_project.Association"))
+                                .and_then(|assoc_props| assoc_props.get("endpoints"))
+                                .and_then(|v| v.as_array())
+                                .and_then(|endpoints| endpoints.first())
+                                .and_then(|endpoint| endpoint.as_str())
+                                .and_then(|software_path| objects.get(software_path))
+                                .and_then(|software_ifaces| software_ifaces.get("xyz.openbmc_project.Software.Version"))
+                                .and_then(|software_props| software_props.get("Version"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            (model, cores, threads, firmware_version, location)
                         }
                         None => return Err(StatusCode::NOT_FOUND),
                     }
                 }
                 Err(e) => {
                     warn!("Failed to read processor inventory from DBus: {}", e);
-                    ("Unknown".to_string(), 0u64, 0u64)
+                    ("Unknown".to_string(), 0u64, 0u64, String::new(), String::new())
                 }
             }
         } else {
@@ -632,7 +651,7 @@ pub async fn get_processor(
             if processor_id != "cpu0" {
                 return Err(StatusCode::NOT_FOUND);
             }
-            ("Unknown".to_string(), 0u64, 0u64)
+            ("Unknown".to_string(), 0u64, 0u64, String::new(), String::new())
         };
 
     Ok(Json(json!({
@@ -644,6 +663,12 @@ pub async fn get_processor(
         "Model": model,
         "TotalCores": total_cores,
         "TotalThreads": total_threads,
+        "FirmwareVersion": if firmware_version.is_empty() { Value::Null } else { json!(firmware_version) },
+        "Location": {
+            "PartLocation": {
+                "ServiceLabel": location
+            }
+        },
         "Status": { "State": "Enabled", "Health": "OK" }
     })))
 }
