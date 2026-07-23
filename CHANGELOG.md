@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`GET /Chassis/{id}/Power` power cap from DBus** (`chassis.rs`) —
+  `PowerCapacityWatts` and `PowerLimit.LimitInWatts` now read from
+  `xyz.openbmc_project.Control.Power.Cap / PowerCap` and `PowerCapEnable` at
+  `/xyz/openbmc_project/control/host0/power_cap`.  `LimitInWatts` is set to the
+  cap value when `PowerCapEnable` is `true`, otherwise `null` (cap disabled).
+  `PowerCapacityWatts` reflects the configured cap value regardless of enable state.
+  Added `CorrectionInMs: 0` to the `PowerLimit` object.
+  Maps to upstream `redfish-core/lib/power.hpp` power cap wiring.
+
 - **`GET /Systems/{id}/NetworkInterfaces/{ni_id}` instance endpoint** (`systems.rs`,
   `redfish/mod.rs`) — New handler for host NetworkInterface resources backed by
   `xyz.openbmc_project.Inventory.Item.NetworkInterface` DBus objects.  Returns

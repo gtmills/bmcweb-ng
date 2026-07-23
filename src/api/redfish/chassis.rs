@@ -385,23 +385,45 @@ pub async fn get_chassis_power(
         (vec![], vec![])
     };
 
-    // Read total power consumption from DBus (chassis power sensor)
+    // Read total power consumption from DBus (chassis power sensor).
     // On OpenBMC: /xyz/openbmc_project/sensors/power/total_power
     //   interface: xyz.openbmc_project.Sensor.Value
-    let total_power: Option<f64> = if let Some(conn) = state.dbus_connection.as_deref() {
-        let client = ZBusClient::from_connection(conn.clone());
-        client
-            .get_property(
-                "/xyz/openbmc_project/sensors/power/total_power",
-                "xyz.openbmc_project.Sensor.Value",
-                "Value",
-            )
-            .await
-            .ok()
-            .and_then(|v| v.as_f64())
-    } else {
-        None
-    };
+    let (total_power, power_cap_watts, power_cap_enabled) =
+        if let Some(conn) = state.dbus_connection.as_deref() {
+            let client = ZBusClient::from_connection(conn.clone());
+            let consumed = client
+                .get_property(
+                    "/xyz/openbmc_project/sensors/power/total_power",
+                    "xyz.openbmc_project.Sensor.Value",
+                    "Value",
+                )
+                .await
+                .ok()
+                .and_then(|v| v.as_f64());
+
+            // Read power cap from xyz.openbmc_project.Control.Power.Cap.
+            // On OpenBMC Rainier/Everest: /xyz/openbmc_project/control/host0/power_cap
+            let power_cap_obj = "/xyz/openbmc_project/control/host0/power_cap";
+            let power_cap_iface = "xyz.openbmc_project.Control.Power.Cap";
+            let cap_watts = client
+                .get_property(power_cap_obj, power_cap_iface, "PowerCap")
+                .await
+                .ok()
+                .and_then(|v| v.as_u64())
+                .map(|w| w as f64);
+            let cap_enabled = client
+                .get_property(power_cap_obj, power_cap_iface, "PowerCapEnable")
+                .await
+                .ok()
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
+            (consumed, cap_watts, cap_enabled)
+        } else {
+            (None, None, false)
+        };
+
+    let limit_in_watts = if power_cap_enabled { power_cap_watts } else { None };
 
     Ok(Json(json!({
         "@odata.type": "#Power.v1_7_2.Power",
@@ -413,10 +435,11 @@ pub async fn get_chassis_power(
                 "MemberId": "0",
                 "Name": "Chassis Power Control",
                 "PowerConsumedWatts": total_power,
-                "PowerCapacityWatts": null,
+                "PowerCapacityWatts": power_cap_watts,
                 "PowerLimit": {
-                    "LimitInWatts": null,
-                    "LimitException": "NoAction"
+                    "LimitInWatts": limit_in_watts,
+                    "LimitException": "NoAction",
+                    "CorrectionInMs": 0
                 },
                 "Status": { "State": "Enabled", "Health": "OK" },
                 "RelatedItem": [{ "@odata.id": format!("/redfish/v1/Chassis/{}", chassis_id) }]
