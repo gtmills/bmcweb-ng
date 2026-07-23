@@ -157,6 +157,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Purpose` values as the display name fallback instead of collapsing all
   non-BMC/Host/System entries to `Firmware`.
 
+- **EventLog timestamp fallback** (`src/api/redfish/systems.rs`) — invalid DBus
+  millisecond timestamps now fall back to the current UTC time instead of a
+  fixed Unix-epoch string, avoiding misleading `1970-01-01` timestamps in
+  EventLog responses.
+
 - **`PasswordExpirationDays` PATCH** (`accounts.rs`) — `PATCH /AccountService/Accounts/{id}`
   now accepts `PasswordExpirationDays` (uint64). Writes `UserPasswordExpiry` via
   `set_property` on `xyz.openbmc_project.User.Attributes`.

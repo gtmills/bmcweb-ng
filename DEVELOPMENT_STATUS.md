@@ -114,6 +114,7 @@ bmcweb-ng/
    - Processor resources now expose `FirmwareVersion` and `Location.PartLocation.ServiceLabel` when DBus metadata is present
    - Created Account and EventService subscription responses now include `Location` headers
    - UpdateService firmware inventory now uses a purpose-derived fallback name instead of collapsing all unknown purposes to `Firmware`
+   - EventLog timestamp conversion now falls back to the current time rather than a fixed epoch when DBus time data is invalid
    - TaskService + Tasks collection
    - UpdateService + FirmwareInventory + SimpleUpdate action (202 + Location)
 

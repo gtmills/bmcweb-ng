@@ -1081,7 +1081,7 @@ fn ms_epoch_to_rfc3339(ms: u64) -> String {
     Utc.timestamp_opt(secs, nanos)
         .single()
         .map(|dt| dt.to_rfc3339())
-        .unwrap_or_else(|| "1970-01-01T00:00:00Z".to_string())
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339())
 }
 
 /// GET /redfish/v1/Systems/{system_id}/Storage
