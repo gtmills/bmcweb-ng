@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`GET /Chassis/{id}/Assembly` DBus wiring improvements** (`chassis.rs`) — Assembly
+  handler now includes `Manufacturer` from `Decorator.Asset`, populates `Status.State`
+  from the `Inventory.Item.Present` flag (marking absent FRUs as `"Absent"`), checks
+  both `/inventory/system/<id>` and `/inventory/system/chassis/<id>` inventory paths
+  to handle different OpenBMC tree layouts, sorts assemblies by name for deterministic
+  output, and adds a `debug!()` tracing call and `validate_chassis_id()` guard.
+  Redundant local `use` import removed; now uses module-level `ZBusClient` import.
+  Maps to upstream `redfish-core/lib/assembly.hpp`.
+
 - **`GET /Systems/{id}/EthernetInterfaces/{nic_id}` instance endpoint** (`systems.rs`,
   `redfish/mod.rs`) — New handler for individual host EthernetInterface resources.
   Validates the NIC id against DBus (`xyz.openbmc_project.Network.EthernetInterface /

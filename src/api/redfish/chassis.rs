@@ -1153,20 +1153,31 @@ mod tests {
 /// GET /redfish/v1/Chassis/{chassis_id}/Assembly
 ///
 /// Returns the Assembly resource for a chassis.
-/// On OpenBMC, assembly/FRU data lives at xyz.openbmc_project.Inventory.Decorator.Asset
-/// on the chassis inventory object.
+///
+/// On OpenBMC, FRU assembly members are inventory objects under the chassis
+/// inventory path that implement `xyz.openbmc_project.Inventory.Item`.
+/// Asset data (serial, part number, model, manufacturer) comes from the
+/// `xyz.openbmc_project.Inventory.Decorator.Asset` interface.
+/// Board-specific FRU data (ProductManufacturer, ProductVersion) is on
+/// `xyz.openbmc_project.Inventory.Decorator.Asset`.
+///
+/// Reference: DMTF Redfish Assembly schema v1.5.0
+/// Upstream: redfish-core/lib/assembly.hpp
 pub async fn get_chassis_assembly(
     State(state): State<Arc<AppState>>,
     Path(chassis_id): Path<String>,
 ) -> Result<Json<Value>, StatusCode> {
-    use crate::dbus::{DbusClient, ZBusClient};
+    debug!("GET /redfish/v1/Chassis/{}/Assembly", chassis_id);
+    validate_chassis_id(&chassis_id)?;
 
-    // Validate chassis id
-    let chassis_path = format!("/xyz/openbmc_project/inventory/system/chassis/{}", chassis_id);
+    // OpenBMC inventory path for the chassis and its sub-components.
+    // Both the canonical chassis path and the shorter system-level path are
+    // checked to accommodate different OpenBMC inventory tree layouts.
+    let chassis_path = format!("/xyz/openbmc_project/inventory/system/{}", chassis_id);
+    let chassis_path_alt = format!("/xyz/openbmc_project/inventory/system/chassis/{}", chassis_id);
 
     let assemblies: Vec<Value> = if let Some(conn) = state.dbus_connection.as_deref() {
         let client = ZBusClient::from_connection(conn.clone());
-        // Each sub-component under the chassis path that has Inventory.Item is an assembly member
         match client
             .get_managed_objects(
                 "xyz.openbmc_project.Inventory.Manager",
@@ -1178,43 +1189,68 @@ pub async fn get_chassis_assembly(
                 let asset_iface = "xyz.openbmc_project.Inventory.Decorator.Asset";
                 let item_iface  = "xyz.openbmc_project.Inventory.Item";
                 let mut idx = 0u32;
-                objects
+                let mut assemblies: Vec<Value> = objects
                     .iter()
                     .filter(|(path, ifaces)| {
-                        path.starts_with(&chassis_path)
+                        // Include inventory items that are sub-components of this chassis
+                        (path.starts_with(&chassis_path)
+                            || path.starts_with(&chassis_path_alt))
                             && ifaces.contains_key(item_iface)
                     })
                     .map(|(path, ifaces)| {
                         let name = path.rsplit('/').next().unwrap_or("unknown").to_string();
                         let asset = ifaces.get(asset_iface);
+                        let manufacturer = asset
+                            .and_then(|a| a.get("Manufacturer"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
                         let serial = asset
                             .and_then(|a| a.get("SerialNumber"))
                             .and_then(|v| v.as_str())
-                            .unwrap_or("").to_string();
+                            .unwrap_or("")
+                            .to_string();
                         let part_number = asset
                             .and_then(|a| a.get("PartNumber"))
                             .and_then(|v| v.as_str())
-                            .unwrap_or("").to_string();
+                            .unwrap_or("")
+                            .to_string();
                         let model = asset
                             .and_then(|a| a.get("Model"))
                             .and_then(|v| v.as_str())
-                            .unwrap_or("").to_string();
+                            .unwrap_or("")
+                            .to_string();
+                        // Check present flag; absent items still appear but are marked Absent
+                        let present = ifaces.get(item_iface)
+                            .and_then(|i| i.get("Present"))
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(true);
                         idx += 1;
                         json!({
                             "MemberId": idx.to_string(),
                             "Name": name,
+                            "Manufacturer": manufacturer,
                             "SerialNumber": serial,
                             "PartNumber": part_number,
                             "Model": model,
-                            "Status": { "State": "Enabled", "Health": "OK" }
+                            "Status": {
+                                "State": if present { "Enabled" } else { "Absent" },
+                                "Health": "OK"
+                            }
                         })
                     })
-                    .collect()
+                    .collect();
+                assemblies.sort_by_key(|v| {
+                    v["Name"].as_str().unwrap_or("").to_string()
+                });
+                assemblies
             }
-            Err(_) => vec![],
+            Err(e) => {
+                warn!("Failed to enumerate assembly members from DBus: {}", e);
+                vec![]
+            }
         }
     } else {
-        // No DBus — return empty assembly
         vec![]
     };
 
@@ -1223,8 +1259,8 @@ pub async fn get_chassis_assembly(
         "@odata.id": format!("/redfish/v1/Chassis/{}/Assembly", chassis_id),
         "Id": "Assembly",
         "Name": "Assembly",
-        "Assemblies": assemblies,
-        "Assemblies@odata.count": assemblies.len()
+        "Assemblies@odata.count": assemblies.len(),
+        "Assemblies": assemblies
     })))
 }
 
