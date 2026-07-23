@@ -129,6 +129,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   collection path continues to return an empty list cleanly when no DBus entries
   are available.
 
+- **PCIeDevice location metadata** (`src/api/redfish/systems.rs`) —
+  `GET /Systems/{id}/PCIeDevices/{id}` now includes
+  `Location.PartLocation.ServiceLabel` from
+  `xyz.openbmc_project.Inventory.Decorator.LocationCode.LocationCode` when that
+  DBus decorator is present on the device object.
+
 - **`PasswordExpirationDays` PATCH** (`accounts.rs`) — `PATCH /AccountService/Accounts/{id}`
   now accepts `PasswordExpirationDays` (uint64). Writes `UserPasswordExpiry` via
   `set_property` on `xyz.openbmc_project.User.Attributes`.

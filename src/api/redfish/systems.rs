@@ -1404,6 +1404,13 @@ pub async fn get_pcie_device(
                         .and_then(|v| v.as_str()).unwrap_or("Unknown").to_string();
                     let device_type = props.get("DeviceType")
                         .and_then(|v| v.as_str()).unwrap_or("SingleFunction").to_string();
+                    let location = objects
+                        .get(path)
+                        .and_then(|device_ifaces| device_ifaces.get("xyz.openbmc_project.Inventory.Decorator.LocationCode"))
+                        .and_then(|loc_props| loc_props.get("LocationCode"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     return Ok(Json(json!({
                         "@odata.type": "#PCIeDevice.v1_12_0.PCIeDevice",
                         "@odata.id": format!("/redfish/v1/Systems/{}/PCIeDevices/{}", system_id, pcie_id),
@@ -1411,6 +1418,9 @@ pub async fn get_pcie_device(
                         "Name": format!("PCIe Device {}", pcie_id),
                         "Manufacturer": manufacturer,
                         "DeviceType": device_type,
+                        "Location": {
+                            "PartLocation": { "ServiceLabel": location }
+                        },
                         "Status": { "State": "Enabled", "Health": "OK" }
                     })));
                 }
