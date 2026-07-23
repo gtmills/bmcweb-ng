@@ -669,6 +669,12 @@ pub async fn get_processor(
                 "ServiceLabel": location
             }
         },
+        "OperatingConfigs": {
+            "@odata.id": format!(
+                "/redfish/v1/Systems/{}/Processors/{}/OperatingConfigs",
+                system_id, processor_id
+            )
+        },
         "Status": { "State": "Enabled", "Health": "OK" }
     })))
 }
