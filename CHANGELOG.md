@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`PATCH /AccountService` MinPasswordLength + MaxPasswordLength** (`accounts.rs`) —
+  `PATCH /redfish/v1/AccountService` now accepts `MinPasswordLength` and
+  `MaxPasswordLength` fields and writes them to `xyz.openbmc_project.User.Manager /
+  MinPasswordLength` and `MaxPasswordLength` respectively (available since OpenBMC
+  2.13+).  Existing `AccountLockoutThreshold` and `AccountLockoutDuration` handling
+  unchanged.  Doc comment and DBus path variables refactored for clarity.
+  Maps to upstream AccountService schema v1.12.0 and `account_service.hpp`.
+
 - **`GET /Chassis/{id}/Assembly` DBus wiring improvements** (`chassis.rs`) — Assembly
   handler now includes `Manufacturer` from `Decorator.Asset`, populates `Status.State`
   from the `Inventory.Item.Present` flag (marking absent FRUs as `"Absent"`), checks

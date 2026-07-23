@@ -207,9 +207,18 @@ pub async fn get_account_service(
 
 /// PATCH /redfish/v1/AccountService
 ///
-/// Allows updating account lockout policy via DBus:
-///   xyz.openbmc_project.User.Manager / MaxLoginAttemptBeforeLockout (u32)
-///   xyz.openbmc_project.User.Manager / AccountUnlockTimeout (u32)
+/// Allows updating account lockout and password policy via DBus.
+///
+/// Supported fields:
+/// - `AccountLockoutThreshold`  → `MaxLoginAttemptBeforeLockout` (u32)
+/// - `AccountLockoutDuration`   → `AccountUnlockTimeout` (u32, seconds)
+/// - `MinPasswordLength`        → `MinPasswordLength` (u8)
+/// - `MaxPasswordLength`        → `MaxPasswordLength` (u8)
+///
+/// OpenBMC DBus:
+///   Service: xyz.openbmc_project.User.Manager
+///   Object:  /xyz/openbmc_project/user
+///   Interface: xyz.openbmc_project.User.Manager
 pub async fn patch_account_service(
     State(state): State<Arc<AppState>>,
     Extension(session): Extension<UserSession>,
@@ -220,15 +229,12 @@ pub async fn patch_account_service(
 
     if let Some(conn) = state.dbus_connection.as_deref() {
         let client = ZBusClient::from_connection(conn.clone());
+        let user_svc = "xyz.openbmc_project.User.Manager";
+        let user_obj = "/xyz/openbmc_project/user";
 
         if let Some(threshold) = body.get("AccountLockoutThreshold").and_then(|v| v.as_u64()) {
             if let Err(e) = client
-                .set_property(
-                    "/xyz/openbmc_project/user",
-                    "xyz.openbmc_project.User.Manager",
-                    "MaxLoginAttemptBeforeLockout",
-                    serde_json::json!(threshold),
-                )
+                .set_property(user_obj, user_svc, "MaxLoginAttemptBeforeLockout", serde_json::json!(threshold))
                 .await
             {
                 warn!("Failed to set MaxLoginAttemptBeforeLockout: {}", e);
@@ -239,17 +245,36 @@ pub async fn patch_account_service(
 
         if let Some(duration) = body.get("AccountLockoutDuration").and_then(|v| v.as_u64()) {
             if let Err(e) = client
-                .set_property(
-                    "/xyz/openbmc_project/user",
-                    "xyz.openbmc_project.User.Manager",
-                    "AccountUnlockTimeout",
-                    serde_json::json!(duration),
-                )
+                .set_property(user_obj, user_svc, "AccountUnlockTimeout", serde_json::json!(duration))
                 .await
             {
                 warn!("Failed to set AccountUnlockTimeout: {}", e);
             } else {
                 info!("AccountLockoutDuration set to {} via DBus", duration);
+            }
+        }
+
+        // MinPasswordLength / MaxPasswordLength — supported since OpenBMC 2.13+
+        // via xyz.openbmc_project.User.Manager on the user manager object.
+        if let Some(min_len) = body.get("MinPasswordLength").and_then(|v| v.as_u64()) {
+            if let Err(e) = client
+                .set_property(user_obj, user_svc, "MinPasswordLength", serde_json::json!(min_len))
+                .await
+            {
+                warn!("Failed to set MinPasswordLength: {}", e);
+            } else {
+                info!("MinPasswordLength set to {} via DBus", min_len);
+            }
+        }
+
+        if let Some(max_len) = body.get("MaxPasswordLength").and_then(|v| v.as_u64()) {
+            if let Err(e) = client
+                .set_property(user_obj, user_svc, "MaxPasswordLength", serde_json::json!(max_len))
+                .await
+            {
+                warn!("Failed to set MaxPasswordLength: {}", e);
+            } else {
+                info!("MaxPasswordLength set to {} via DBus", max_len);
             }
         }
     }
