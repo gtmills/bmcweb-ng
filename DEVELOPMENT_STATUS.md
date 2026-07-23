@@ -251,6 +251,13 @@ bmcweb-ng/
 
 10. **Updated LogServices collection** (`systems.rs`) — collection now includes EventLog, PostCodes, and HostLogger
 
+### ✅ Completed — Systems Collection Hypervisor Awareness
+
+1. **Dynamic Systems collection** (`systems.rs`) — `GET /Systems` now queries the hypervisor
+   DBus object and includes `hypervisor` in `Members` when it exists.  Collection
+   `Members@odata.count` reflects the actual member count.
+   Maps to upstream `redfish-core/lib/hypervisor_system.hpp`.
+
 ### ✅ Completed July 2026 — Upstream Sync Round 3
 
 1. **Storage instance** (`systems.rs`) — `GET /Systems/{id}/Storage/{storage_id}` with DBus drive enumeration

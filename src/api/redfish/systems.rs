@@ -70,17 +70,44 @@ fn validate_system_id(system_id: &str) -> Result<(), StatusCode> {
 // ---------------------------------------------------------------------------
 
 /// GET /redfish/v1/Systems
+///
+/// Returns the ComputerSystemCollection.  Always includes the primary `system`
+/// member.  If the hypervisor DBus object is present at
+/// `/xyz/openbmc_project/state/hypervisor0` the `hypervisor` member is also
+/// advertised, matching upstream `redfish-core/lib/hypervisor_system.hpp`.
 pub async fn get_systems_collection(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
 ) -> Result<Json<Value>, StatusCode> {
     debug!("GET /redfish/v1/Systems");
+
+    // Check whether a hypervisor DBus object is available.
+    let hypervisor_present = if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        client
+            .get_property(
+                "/xyz/openbmc_project/state/hypervisor0",
+                "xyz.openbmc_project.State.Host",
+                "CurrentHostState",
+            )
+            .await
+            .is_ok()
+    } else {
+        false
+    };
+
+    let mut members: Vec<Value> = vec![
+        json!({ "@odata.id": "/redfish/v1/Systems/system" }),
+    ];
+    if hypervisor_present {
+        members.push(json!({ "@odata.id": "/redfish/v1/Systems/hypervisor" }));
+    }
 
     Ok(Json(json!({
         "@odata.type": "#ComputerSystemCollection.ComputerSystemCollection",
         "@odata.id": "/redfish/v1/Systems",
         "Name": "Computer System Collection",
-        "Members@odata.count": 1,
-        "Members": [{ "@odata.id": "/redfish/v1/Systems/system" }]
+        "Members@odata.count": members.len(),
+        "Members": members
     })))
 }
 
@@ -2289,16 +2316,8 @@ pub async fn get_hypervisor_system(
     })))
 }
 
-/// Update `get_systems_collection` to optionally advertise the hypervisor member.
-///
-/// This helper is called by `get_systems_collection_with_hypervisor` — a
-/// separate thin wrapper that checks for hypervisor presence.
-/// The existing `get_systems_collection` continues to return the static
-/// collection; clients that query `/Systems/hypervisor` directly get the
-/// full resource via `get_hypervisor_system`.
-
 // ---------------------------------------------------------------------------
-// StorageController instance (TODO 5)
+// StorageController instance
 // ---------------------------------------------------------------------------
 
 /// GET /redfish/v1/Systems/{system_id}/Storage/{storage_id}/Controllers/{controller_id}

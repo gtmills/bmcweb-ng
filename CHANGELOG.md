@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`/Systems` collection advertises hypervisor member dynamically** (`systems.rs`) —
+  `GET /redfish/v1/Systems` now probes `xyz.openbmc_project.State.Host /
+  CurrentHostState` at `/state/hypervisor0`; when the object exists the
+  `hypervisor` member is included in `Members` (matching upstream
+  `redfish-core/lib/hypervisor_system.hpp`).  Collection count is now dynamic.
+  Platforms without a hypervisor DBus object return the single `system` entry as
+  before.
+
 ### Changed
 
 - **Remove misleading TODO labels from section headers** (`systems.rs`, `chassis.rs`,
