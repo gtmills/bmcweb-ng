@@ -142,6 +142,9 @@ pub const PRIVILEGE_DELETE_SESSION: &[Privilege] = &[Privilege::ConfigureSelf];
 /// Privileges required to manage user accounts.
 pub const PRIVILEGE_CONFIGURE_USERS: &[Privilege] = &[Privilege::ConfigureUsers];
 
+/// Privileges required to modify component-level resources such as interfaces.
+pub const PRIVILEGE_CONFIGURE_COMPONENTS: &[Privilege] = &[Privilege::ConfigureComponents];
+
 // ---------------------------------------------------------------------------
 // Axum extractor / check helper
 // ---------------------------------------------------------------------------

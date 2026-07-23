@@ -29,7 +29,7 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
-use crate::auth::privilege::{check_privilege, PRIVILEGE_ACTION, PRIVILEGE_PATCH};
+use crate::auth::privilege::{check_privilege, PRIVILEGE_ACTION, PRIVILEGE_CONFIGURE_COMPONENTS, PRIVILEGE_PATCH};
 use crate::auth::session::UserSession;
 use crate::dbus::{DbusClient, ZBusClient};
 use crate::AppState;
@@ -625,7 +625,7 @@ pub async fn patch_manager_ethernet_interface(
         "PATCH /redfish/v1/Managers/{}/EthernetInterfaces/{}",
         manager_id, nic_id
     );
-    check_privilege(Some(&session), PRIVILEGE_PATCH)?;
+    check_privilege(Some(&session), PRIVILEGE_CONFIGURE_COMPONENTS)?;
     validate_manager_id(&manager_id)?;
 
     if let Some(conn) = state.dbus_connection.as_deref() {

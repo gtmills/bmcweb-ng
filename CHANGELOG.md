@@ -113,6 +113,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `xyz.openbmc_project.Control.Power.Cap.PowerCap` when the matching processor
   power-cap interface is present.
 
+- **Manager EthernetInterface PATCH privilege** (`src/api/redfish/managers.rs`) —
+  `PATCH /Managers/{id}/EthernetInterfaces/{id}` now requires
+  `ConfigureComponents` instead of the generic manager PATCH privilege, matching
+  upstream privilege registration.
+
 - **`PasswordExpirationDays` PATCH** (`accounts.rs`) — `PATCH /AccountService/Accounts/{id}`
   now accepts `PasswordExpirationDays` (uint64). Writes `UserPasswordExpiry` via
   `set_property` on `xyz.openbmc_project.User.Attributes`.

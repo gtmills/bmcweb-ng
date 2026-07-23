@@ -106,6 +106,7 @@ bmcweb-ng/
    - SessionService + Sessions (full login flow, PAM auth, X-Auth-Token); SessionTimeout persisted via AtomicI64; session role now decoded correctly from `GetUserInfo` dictionary replies in QEMU
    - AccountService + Accounts + Roles (four built-in Redfish roles); self-service account PATCH now permits password-only updates for the currently authenticated account while broader edits still require `ConfigureUsers`
    - EventService + Subscriptions + SubmitTestEvent action; PATCH settings persisted
+   - Manager EthernetInterface PATCH now enforces `ConfigureComponents`, matching upstream privilege intent for interface mutation
    - TaskService + Tasks collection
    - UpdateService + FirmwareInventory + SimpleUpdate action (202 + Location)
 
