@@ -1402,23 +1402,150 @@ fn prefix_to_mask(prefix: u8) -> String {
 
 /// GET /redfish/v1/Systems/{system_id}/NetworkInterfaces
 ///
-/// NetworkInterface resources aggregate network adapter hardware.
-/// On OpenBMC QEMU there are no discrete NICs to report; returns an empty
-/// collection so that clients discover the correct endpoint via the link.
+/// Returns the NetworkInterface collection for the system.
+///
+/// NetworkInterface resources represent network adapter cards in the system.
+/// On OpenBMC, host network adapters are inventory objects with interface
+/// `xyz.openbmc_project.Inventory.Item.NetworkInterface` (distinct from the
+/// BMC's `EthernetInterface` management NICs).
+///
+/// Reference: DMTF Redfish NetworkInterfaceCollection schema
+/// Upstream: redfish-core/lib/network_interface.hpp
 pub async fn get_network_interfaces_collection(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Path(system_id): Path<String>,
 ) -> Result<Json<Value>, StatusCode> {
     debug!("GET /redfish/v1/Systems/{}/NetworkInterfaces", system_id);
     validate_system_id(&system_id)?;
 
+    let members: Vec<Value> = if let Some(conn) = state.dbus_connection.as_deref() {
+        let client = ZBusClient::from_connection(conn.clone());
+        let ni_iface = "xyz.openbmc_project.Inventory.Item.NetworkInterface";
+        match client
+            .get_managed_objects(
+                "xyz.openbmc_project.Inventory.Manager",
+                "/xyz/openbmc_project/inventory",
+            )
+            .await
+        {
+            Ok(objects) => {
+                let mut nics: Vec<String> = objects
+                    .into_iter()
+                    .filter(|(_, ifaces)| ifaces.contains_key(ni_iface))
+                    .filter_map(|(path, _)| {
+                        path.rsplit('/').next().map(|s| s.to_string())
+                    })
+                    .collect();
+                nics.sort();
+                nics.into_iter()
+                    .map(|id| {
+                        json!({
+                            "@odata.id": format!(
+                                "/redfish/v1/Systems/{}/NetworkInterfaces/{}",
+                                system_id, id
+                            )
+                        })
+                    })
+                    .collect()
+            }
+            Err(_) => vec![],
+        }
+    } else {
+        vec![]
+    };
+
     Ok(Json(json!({
         "@odata.type": "#NetworkInterfaceCollection.NetworkInterfaceCollection",
-        "@odata.id": "/redfish/v1/Systems/system/NetworkInterfaces",
+        "@odata.id": format!("/redfish/v1/Systems/{}/NetworkInterfaces", system_id),
         "Name": "Network Interface Collection",
         "Description": "Collection of host network interface adapters",
-        "Members@odata.count": 0,
-        "Members": []
+        "Members@odata.count": members.len(),
+        "Members": members
+    })))
+}
+
+/// GET /redfish/v1/Systems/{system_id}/NetworkInterfaces/{ni_id}
+///
+/// Returns a single NetworkInterface resource.
+///
+/// Reference: DMTF Redfish NetworkInterface schema v1.2.0
+/// Upstream: redfish-core/lib/network_interface.hpp
+///
+/// OpenBMC DBus:
+///   Service: xyz.openbmc_project.Inventory.Manager
+///   Object:  /xyz/openbmc_project/inventory/system/.../<ni_id>
+///   Interfaces:
+///     xyz.openbmc_project.Inventory.Item.NetworkInterface
+///     xyz.openbmc_project.Inventory.Decorator.Asset :: Manufacturer, Model
+pub async fn get_network_interface(
+    State(state): State<Arc<AppState>>,
+    Path((system_id, ni_id)): Path<(String, String)>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!(
+        "GET /redfish/v1/Systems/{}/NetworkInterfaces/{}",
+        system_id, ni_id
+    );
+    validate_system_id(&system_id)?;
+
+    let (manufacturer, model, part_number, serial_number) =
+        if let Some(conn) = state.dbus_connection.as_deref() {
+            let client = ZBusClient::from_connection(conn.clone());
+            let objects = client
+                .get_managed_objects(
+                    "xyz.openbmc_project.Inventory.Manager",
+                    "/xyz/openbmc_project/inventory",
+                )
+                .await
+                .unwrap_or_default();
+
+            let ni_iface = "xyz.openbmc_project.Inventory.Item.NetworkInterface";
+            let found = objects
+                .iter()
+                .find(|(path, ifaces)| {
+                    ifaces.contains_key(ni_iface)
+                        && path.rsplit('/').next() == Some(ni_id.as_str())
+                });
+
+            match found {
+                Some((_, ifaces)) => {
+                    let asset_iface = "xyz.openbmc_project.Inventory.Decorator.Asset";
+                    let asset = ifaces.get(asset_iface);
+                    let mfr = asset.and_then(|a| a.get("Manufacturer"))
+                        .and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let mdl = asset.and_then(|a| a.get("Model"))
+                        .and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let pn = asset.and_then(|a| a.get("PartNumber"))
+                        .and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let sn = asset.and_then(|a| a.get("SerialNumber"))
+                        .and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    (mfr, mdl, pn, sn)
+                }
+                None => return Err(StatusCode::NOT_FOUND),
+            }
+        } else {
+            return Err(StatusCode::NOT_FOUND);
+        };
+
+    Ok(Json(json!({
+        "@odata.type": "#NetworkInterface.v1_2_0.NetworkInterface",
+        "@odata.id": format!(
+            "/redfish/v1/Systems/{}/NetworkInterfaces/{}",
+            system_id, ni_id
+        ),
+        "Id": ni_id,
+        "Name": ni_id,
+        "Description": "Host Network Interface",
+        "Manufacturer": manufacturer,
+        "Model": model,
+        "PartNumber": part_number,
+        "SerialNumber": serial_number,
+        "Status": { "State": "Enabled", "Health": "OK" },
+        "NetworkDeviceFunctions": {
+            "@odata.id": format!(
+                "/redfish/v1/Systems/{}/NetworkInterfaces/{}/NetworkDeviceFunctions",
+                system_id, ni_id
+            )
+        }
     })))
 }
 

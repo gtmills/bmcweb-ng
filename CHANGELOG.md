@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`GET /Systems/{id}/NetworkInterfaces/{ni_id}` instance endpoint** (`systems.rs`,
+  `redfish/mod.rs`) — New handler for host NetworkInterface resources backed by
+  `xyz.openbmc_project.Inventory.Item.NetworkInterface` DBus objects.  Returns
+  `Manufacturer`, `Model`, `PartNumber`, `SerialNumber` from `Decorator.Asset`,
+  and a `NetworkDeviceFunctions` collection link.  Collection handler updated to
+  enumerate NICs dynamically from DBus and use dynamic `@odata.id`.
+  Maps to upstream `redfish-core/lib/network_interface.hpp`.
+
 - **`GET /Systems/{id}/Storage/{id}/Drives/{drive_id}` instance endpoint** (`systems.rs`,
   `redfish/mod.rs`) — New handler for Drive resources scoped under a Storage controller.
   Looks up `xyz.openbmc_project.Inventory.Item.Drive` in DBus inventory; returns 404
