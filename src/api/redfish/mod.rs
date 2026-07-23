@@ -106,6 +106,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/Chassis/:chassis_id/Power", get(chassis::get_chassis_power))
         .route("/Chassis/:chassis_id/Thermal", get(chassis::get_chassis_thermal))
         .route("/Chassis/:chassis_id/Sensors", get(chassis::get_chassis_sensors))
+        .route("/Chassis/:chassis_id/Sensors/:sensor_id", get(chassis::get_chassis_sensor))
         .route("/Chassis/:chassis_id/NetworkAdapters",
                get(chassis::get_chassis_network_adapters))
         .route("/Chassis/:chassis_id/Assembly",

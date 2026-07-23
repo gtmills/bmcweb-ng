@@ -135,6 +135,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `xyz.openbmc_project.Inventory.Decorator.LocationCode.LocationCode` when that
   DBus decorator is present on the device object.
 
+- **Chassis sensor resource and frequency type** (`src/api/redfish/chassis.rs`) —
+  `GET /Chassis/{id}/Sensors/{sensor_id}` now resolves individual sensor objects
+  from DBus and maps `/xyz/openbmc_project/sensors/frequency/...` to
+  `ReadingType: Frequency` with `ReadingUnits: Hz`.
+
 - **`PasswordExpirationDays` PATCH** (`accounts.rs`) — `PATCH /AccountService/Accounts/{id}`
   now accepts `PasswordExpirationDays` (uint64). Writes `UserPasswordExpiry` via
   `set_property` on `xyz.openbmc_project.User.Attributes`.

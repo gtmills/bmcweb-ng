@@ -110,6 +110,7 @@ bmcweb-ng/
    - Manager NetworkProtocol now reflects SSH `ProtocolEnabled` from DBus when the dropbear service object is present, and still degrades cleanly when it is absent
    - Manager DBusEventLog now exposes both collection and per-entry GET routes, returning empty collections cleanly when no DBus entries are present
    - PCIeDevice resources now include `Location.PartLocation.ServiceLabel` when DBus location-code metadata is exposed
+   - Chassis sensor resources now include direct per-sensor GET handling, including frequency sensor type translation to `ReadingType: Frequency`
    - TaskService + Tasks collection
    - UpdateService + FirmwareInventory + SimpleUpdate action (202 + Location)
 

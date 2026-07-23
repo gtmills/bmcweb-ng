@@ -537,6 +537,15 @@ pub async fn get_chassis_thermal(
 /// Returns the SensorCollection for this chassis.  On OpenBMC every sensor
 /// object under `/xyz/openbmc_project/sensors/` with a `Sensor.Value` interface
 /// is enumerated here.
+fn sensor_path_to_id(path: &str) -> String {
+    let parts: Vec<&str> = path.rsplitn(3, '/').collect();
+    if parts.len() >= 2 {
+        format!("{}_{}", parts[1], parts[0])
+    } else {
+        parts[0].to_string()
+    }
+}
+
 async fn fetch_chassis_sensors(
     client: &dyn DbusClient,
     chassis_id: &str,
@@ -558,12 +567,7 @@ async fn fetch_chassis_sensors(
             let mut sensors: Vec<Value> = objects
                 .keys()
                 .map(|path| {
-                    let parts: Vec<&str> = path.rsplitn(3, '/').collect();
-                    let id = if parts.len() >= 2 {
-                        format!("{}_{}", parts[1], parts[0])
-                    } else {
-                        parts[0].to_string()
-                    };
+                    let id = sensor_path_to_id(path);
                     json!({
                         "@odata.id": format!(
                             "/redfish/v1/Chassis/{}/Sensors/{}",
@@ -603,6 +607,70 @@ pub async fn get_chassis_sensors(
         "Description": "Collection of all sensors on this chassis",
         "Members@odata.count": members.len(),
         "Members": members
+    })))
+}
+
+/// GET /redfish/v1/Chassis/{chassis_id}/Sensors/{sensor_id}
+///
+/// Returns a single chassis sensor resource. Currently includes frequency
+/// sensors in addition to the existing OpenBMC sensor namespaces.
+pub async fn get_chassis_sensor(
+    State(state): State<Arc<AppState>>,
+    Path((chassis_id, sensor_id)): Path<(String, String)>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!("GET /redfish/v1/Chassis/{}/Sensors/{}", chassis_id, sensor_id);
+    validate_chassis_id(&chassis_id)?;
+
+    let conn = state.dbus_connection.as_deref().ok_or(StatusCode::NOT_FOUND)?;
+    let client = ZBusClient::from_connection(conn.clone());
+    let objects = client
+        .get_managed_objects(
+            "xyz.openbmc_project.Sensor",
+            "/xyz/openbmc_project/sensors",
+        )
+        .await
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+
+    let Some((path, ifaces)) = objects.iter().find(|(path, ifaces)| {
+        ifaces.contains_key("xyz.openbmc_project.Sensor.Value")
+            && sensor_path_to_id(path) == sensor_id
+    }) else {
+        return Err(StatusCode::NOT_FOUND);
+    };
+
+    let props = ifaces
+        .get("xyz.openbmc_project.Sensor.Value")
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let reading = props
+        .get("Value")
+        .and_then(|v| v.as_f64())
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let (reading_type, reading_units) = if path.contains("/sensors/temperature/") {
+        ("Temperature", "Cel")
+    } else if path.contains("/sensors/voltage/") {
+        ("Voltage", "V")
+    } else if path.contains("/sensors/fan_tach/") {
+        ("Rotational", "RPM")
+    } else if path.contains("/sensors/power/") {
+        ("Power", "W")
+    } else if path.contains("/sensors/current/") {
+        ("Current", "A")
+    } else if path.contains("/sensors/frequency/") {
+        ("Frequency", "Hz")
+    } else {
+        ("Other", "")
+    };
+
+    Ok(Json(json!({
+        "@odata.type": "#Sensor.v1_9_0.Sensor",
+        "@odata.id": format!("/redfish/v1/Chassis/{}/Sensors/{}", chassis_id, sensor_id),
+        "Id": sensor_id,
+        "Name": sensor_id,
+        "Reading": reading,
+        "ReadingType": reading_type,
+        "ReadingUnits": reading_units,
+        "Status": { "State": "Enabled", "Health": "OK" }
     })))
 }
 
