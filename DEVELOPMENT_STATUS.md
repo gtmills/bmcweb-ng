@@ -443,6 +443,9 @@ Measured on OpenBMC `qemuarm` (emulated Cortex-A15, 256 MB RAM). Binary:
 | Unit tests (v0.4.1) | — | **157** | ⚠️ Windows host in this workspace lacks `link.exe`, so local `cargo test` could not be rerun here |
 | QEMU smoke checks (2026-07-21) | — | **17/17** | ✅ Injected `bmcweb-ng` release binary into OpenBMC QEMU and validated core Redfish routes |
 | QEMU privileged PATCH checks (2026-07-23) | — | **5/5** | ✅ EventService, SessionService, and NetworkProtocol mutating paths validated after DBus role-decoding fix |
+| Redfish routes (Phase 5, 2026-07-24) | — | **130+** | ✅ 10 new routes across Systems/Chassis/Managers added in Phase 5 |
+| Unit tests (Phase 5, 2026-07-24) | — | **172** | ✅ 0 failures (171 lib + 1 main) on Ubuntu WSL2/Linux |
+| QEMU smoke tests (Phase 5, 2026-07-24) | — | **26/26** | ✅ All core + new Phase 5 endpoints validated on qemuarm via SSH tunnel |
 
 ## Development Roadmap
 
